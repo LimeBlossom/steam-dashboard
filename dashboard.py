@@ -244,11 +244,11 @@ def load_wishlist_totals(app_id):
         (str(app_id),)
     ).fetchone()
     conn.close()
-    if row and (row[0] or row[1] or row[2] or row[3]):
+    if row:
         total = {"adds": row[0], "deletes": row[1], "purchases": row[2], "gifts": row[3]}
         total["net"] = total["adds"] - total["deletes"] - total["purchases"] - total["gifts"]
         return total
-    return {}
+    return {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0, "net": 0}
 
 
 # ========== HTTP FETCH WITH BACKOFF ==========
