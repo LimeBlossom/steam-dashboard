@@ -2356,7 +2356,8 @@ body {
       salesTimelineChart.data.datasets[1].data = timeline.map(function(r) { return r[3]; });
       salesTimelineChart.update('none');
 
-      var daily = data.daily_sales || [];
+      var dailyRaw = data.daily_sales || [];
+      var daily = dailyRaw.filter(function(r) { return r[1] !== 0 || r[2] !== 0 || r[4] !== 0; });
       salesChart.data.labels = daily.map(function(r) { return r[0].substring(5); });
       salesChart.data.datasets[0].data = daily.map(function(r) { return r[1]; });
       salesChart.data.datasets[1].data = daily.map(function(r) { return -r[2]; });
