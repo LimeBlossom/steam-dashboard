@@ -381,12 +381,23 @@ def fetch_wishlist_by_country(financial_key, app_id, launch_date):
 
 
 def refresh_all_sales(financial_key, app_id, launch_date):
+    app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
-    current = launch
 
+    # Find already-fetched dates to skip (gap-aware resume)
+    conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
+    ).fetchall())
+    conn.close()
+
+    current = launch
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if ds in existing:
+            current += timedelta(days=1)
+            continue
         units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
@@ -530,17 +541,8 @@ class DataCollector:
             if players > gs.peak_players:
                 gs.peak_players = players
 
-            # Sales
-            if self.is_first_collection:
-                existing = get_sales_totals(app_id)
-                if existing[0] > 0:
-                    print(f"  [{game_name}] Existing data, refreshing recent only...")
-                    refresh_recent_sales(financial_key, app_id)
-                else:
-                    print(f"  [{game_name}] No data, full refresh...")
-                    refresh_all_sales(financial_key, app_id, launch_date)
-            else:
-                refresh_recent_sales(financial_key, app_id)
+            # Sales (resumes from where it left off, fills any gaps)
+            refresh_all_sales(financial_key, app_id, launch_date)
 
             totals = get_sales_totals(app_id)
             total_units = totals[0]
