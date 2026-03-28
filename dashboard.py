@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Steam Dashboard - Real-time sales monitoring for Steam games
-https://github.com/xxx/steam-dashboard
+https://github.com/chihyunn/steam-dashboard
 
 Zero external dependencies (stdlib only).
 Settings stored in SQLite. Web-based setup wizard on first run.
@@ -2464,7 +2464,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def _json_response(self, data, status=200):
         self.send_response(status)
         self.send_header('Content-Type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(data, ensure_ascii=False).encode('utf-8'))
 
@@ -2606,10 +2605,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             }
             self._json_response(payload)
 
-        elif parsed.path == '/api/settings':
-            settings = get_all_settings()
-            self._json_response(settings)
-
         else:
             self.send_response(404)
             self.end_headers()
@@ -2647,7 +2642,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         self.end_headers()

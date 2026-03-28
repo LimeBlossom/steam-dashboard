@@ -135,6 +135,20 @@ sudo systemctl start steam-dashboard
 
 Your dashboard is now at `http://your-server-ip:8081`.
 
+### Security Note
+
+This dashboard has no built-in authentication. If you're deploying to a public server, put it behind a reverse proxy with basic auth:
+
+```nginx
+location / {
+    auth_basic "Steam Dashboard";
+    auth_basic_user_file /etc/nginx/.htpasswd;
+    proxy_pass http://127.0.0.1:8081;
+}
+```
+
+Or restrict access by IP using your firewall.
+
 ## How It Compares
 
 | Feature | Steam Dashboard | Steamboard | Steamworks Extras |
@@ -150,7 +164,7 @@ Your dashboard is now at `http://your-server-ip:8081`.
 
 Everything is configured through the web UI. There are no config files to edit.
 
-For advanced users: all settings are stored in a local SQLite database (`dashboard.db`) created on first run. You can back it up, move it to another server, or inspect it with any SQLite client.
+For advanced users: all settings are stored in a local SQLite database (`steam_dashboard.db`) created on first run. You can back it up, move it to another server, or inspect it with any SQLite client.
 
 ## Tech Stack
 
