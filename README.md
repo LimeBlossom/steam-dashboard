@@ -6,6 +6,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa.svg)](https://github.com/sponsors/chihyunn)
 
+**English** | [한국어](README_KO.md)
+
 ![Dashboard](screenshots/dashboard.png)
 
 ## Why This Exists
@@ -85,11 +87,36 @@ This is the one that's hard to find. It accesses sales, revenue, and wishlist da
 
 Get notified on your phone when someone buys your game.
 
+### Step 1: Create a Bot
+
 1. Open Telegram and message [@BotFather](https://t.me/BotFather)
-2. Send `/newbot` and follow the prompts to create a bot
-3. Copy the **bot token** (looks like `123456789:ABCdef...`)
-4. Message [@userinfobot](https://t.me/userinfobot) to get your **chat ID**
-5. Enter both in the setup wizard
+2. Send `/newbot`
+3. Choose a name (e.g., "My Steam Dashboard")
+4. Choose a username (e.g., `my_steam_dash_bot`)
+5. BotFather will give you a **bot token** — looks like:
+   ```
+   8425733605:AAH_n6tiXo_-fn4TKhdr7jTYVA6vnVn390o
+   ```
+6. Copy and save it
+
+### Step 2: Get Your Chat ID
+
+1. Message [@userinfobot](https://t.me/userinfobot) on Telegram
+2. It will reply with your **chat ID** — a number like `7271353545`
+3. To add multiple recipients, get each person's chat ID
+
+### Step 3: Start Your Bot
+
+1. Open your bot in Telegram (search by the username you chose)
+2. Press **Start** — this is required or the bot can't message you
+3. Enter the bot token and chat ID(s) in the setup wizard
+
+### What You'll Get
+
+- New sale alert with country breakdown
+- New review notification
+- Player count spike alert (50%+ increase)
+- Wishlist change notification (5+ change)
 
 ## Deploy to Server
 
