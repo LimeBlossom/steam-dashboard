@@ -138,7 +138,7 @@ def get_player_history(app_id, limit=144):
 
 def get_all_daily_sales(app_id):
     conn = get_conn()
-    rows = conn.execute("SELECT date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd FROM daily_sales WHERE app_id=? ORDER BY date", (str(app_id),)).fetchall()
+    rows = conn.execute("SELECT date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd FROM daily_sales WHERE app_id=? AND (units_sold != 0 OR units_returned != 0 OR net_revenue_usd != 0) ORDER BY date", (str(app_id),)).fetchall()
     conn.close()
     return rows
 
