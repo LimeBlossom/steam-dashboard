@@ -12,9 +12,9 @@ config.json 편집 필요 없음. 개발자가 아니어도 쓸 수 있을 정�
 
 ## Phases
 
-### Phase 1 — Core Dashboard (config.json 기반) ✅ DONE
+### Phase 1 — Core Dashboard ✅ DONE
 
-단일 게임, config.json, 다크 테마, 한/영 전환.
+단일 게임, 다크 테마, 한/영 전환, 기본 데이터 수집.
 
 **파일:** `dashboard.py` (2059줄, 문법 통과)
 
@@ -41,9 +41,9 @@ config.json 편집 필요 없음. 개발자가 아니어도 쓸 수 있을 정�
 
 ---
 
-### Phase 2 — Web Setup Wizard
+### Phase 2 — Web Setup Wizard ✅ DONE
 
-config.json 대신 웹 마법사로 설정. SQLite에 저장.
+웹 마법사로 설정. SQLite에 저장. config.json 불필요.
 
 **새 파일/변경:**
 - `dashboard.py` 수정
@@ -105,9 +105,9 @@ CREATE TABLE IF NOT EXISTS settings (
 
 ---
 
-### Phase 3 — Multi-game Support
+### Phase 3 — Multi-game Support ✅ DONE
 
-여러 게임을 동시에 모니터링.
+여러 게임을 동시에 모니터링. 게임별 데이터 테이블.
 
 **DB 변경:**
 - 모든 데이터 테이블에 `app_id` 컬럼 추가 (또는 테이블명에 prefix)

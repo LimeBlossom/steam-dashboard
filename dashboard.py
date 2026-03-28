@@ -90,7 +90,7 @@ def get_all_settings():
         'steam_financial_key': get_setting('steam_financial_key', ''),
         'games': get_setting('games', []),
         'telegram': get_setting('telegram', {'enabled': False, 'bot_token': '', 'chat_ids': []}),
-        'dashboard': get_setting('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'wine'}),
+        'dashboard': get_setting('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'steam'}),
     }
 
 
@@ -99,7 +99,7 @@ def save_all_settings(data):
     set_setting('steam_financial_key', data.get('steam_financial_key', ''))
     set_setting('games', data.get('games', []))
     set_setting('telegram', data.get('telegram', {'enabled': False, 'bot_token': '', 'chat_ids': []}))
-    set_setting('dashboard', data.get('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'wine'}))
+    set_setting('dashboard', data.get('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'steam'}))
 
 
 # --- Per-game data helpers ---
@@ -654,91 +654,95 @@ SETUP_HTML_TEMPLATE = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMxNzFhMjEiLz4KICA8cmVjdCB4PSIxMCIgeT0iMjIiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMiIgcng9IjMiIGZpbGw9IiMxYjI4MzgiIG9wYWNpdHk9IjAuNiIvPgogIDxyZWN0IHg9IjE0IiB5PSI0MCIgd2lkdGg9IjYiIGhlaWdodD0iMTIiIHJ4PSIxIiBmaWxsPSIjMmE0NzVlIi8+CiAgPHJlY3QgeD0iMjIiIHk9IjM0IiB3aWR0aD0iNiIgaGVpZ2h0PSIxOCIgcng9IjEiIGZpbGw9IiMzZDZjOGUiLz4KICA8cmVjdCB4PSIzMCIgeT0iMjgiIHdpZHRoPSI2IiBoZWlnaHQ9IjI0IiByeD0iMSIgZmlsbD0iIzY2YzBmNCIvPgogIDxyZWN0IHg9IjM4IiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iMjAiIHJ4PSIxIiBmaWxsPSIjNjZjMGY0Ii8+CiAgPHJlY3QgeD0iNDYiIHk9IjI0IiB3aWR0aD0iNiIgaGVpZ2h0PSIyOCIgcng9IjEiIGZpbGw9IiM2NmMwZjQiLz4KICA8cG9seWxpbmUgcG9pbnRzPSIxNywzOCAyNSwzMiAzMywyNiA0MSwzMCA0OSwyMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTRkMDA3IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTciIGN5PSIzOCIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iMzMiIGN5PSIyNiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iNDkiIGN5PSIyMiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+Cjwvc3ZnPg==">
 <title>Steam Dashboard - Setup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --bg: #080509;
-  --bg-card: #1a0f14;
-  --bg-input: #0d0a0e;
-  --border: #3a2030;
-  --border-focus: #a84a56;
-  --text: #e8ddd0;
-  --text-dim: #9a8878;
-  --text-muted: #6a5a4e;
-  --accent: #a84a56;
-  --accent-dim: #722f37;
-  --gold: #c9a84c;
-  --green: #5a9a5e;
-  --red: #c45a5a;
-  --font-display: 'Crimson Pro', Georgia, serif;
-  --font-body: 'DM Sans', -apple-system, sans-serif;
+  --steam-dark: #171a21;
+  --steam-navy: #1b2838;
+  --steam-blue-dark: #2a475e;
+  --steam-blue-med: #3d6c8e;
+  --steam-blue-light: #66c0f4;
+  --steam-green: #5c7e10;
+  --steam-green-bright: #a4d007;
+  --steam-text: #c7d5e0;
+  --steam-text-dim: #8f98a0;
+  --steam-text-dark: #556772;
+  --font-body: 'Noto Sans KR', 'Noto Sans', -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
   font-family: var(--font-body);
-  background: var(--bg);
-  color: var(--text);
+  background: var(--steam-dark);
+  color: var(--steam-text);
   min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 40px 20px;
 }
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  opacity: 0.02;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-}
 .wizard {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 640px;
+  max-width: 680px;
 }
 .wizard-header {
   text-align: center;
-  margin-bottom: 40px;
+  margin-bottom: 32px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #2a475e;
 }
 .wizard-header h1 {
-  font-family: var(--font-display);
-  font-size: 36px;
-  font-weight: 600;
+  font-family: var(--font-body);
+  font-size: 28px;
+  font-weight: 700;
   margin-bottom: 8px;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.01em;
+  color: #ffffff;
 }
 .wizard-header p {
-  font-size: 15px;
-  color: var(--text-dim);
+  font-size: 14px;
+  color: var(--steam-text-dim);
   line-height: 1.6;
 }
-/* Steps indicator */
+/* Steps indicator — Steam tab bar style */
 .steps-bar {
   display: flex;
   justify-content: center;
-  gap: 8px;
-  margin-bottom: 32px;
+  gap: 4px;
+  margin-bottom: 24px;
+  background: rgba(0,0,0,0.2);
+  border-radius: 4px;
+  padding: 3px;
 }
 .step-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--border);
+  flex: 1;
+  height: 32px;
+  border-radius: 2px;
+  background: transparent;
   transition: all 0.3s;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--steam-text-dark);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 .step-dot.active {
-  background: var(--accent);
-  box-shadow: 0 0 8px rgba(168,74,86,0.4);
+  background: var(--steam-blue-dark);
+  color: var(--steam-blue-light);
+  box-shadow: 0 0 8px rgba(102,192,244,0.15);
 }
 .step-dot.done {
-  background: var(--green);
+  background: rgba(92,126,16,0.2);
+  color: var(--steam-green-bright);
 }
 /* Step panels */
 .step-panel {
@@ -753,44 +757,44 @@ body::after {
   to { opacity: 1; transform: translateY(0); }
 }
 .card {
-  background: linear-gradient(170deg, var(--bg-card), #241520);
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 28px;
-  margin-bottom: 20px;
-}
-.card::after {
-  content: '';
-  display: block;
-  height: 0;
+  background: #16202d;
+  border: 1px solid #2a475e;
+  border-radius: 4px;
+  padding: 24px;
+  margin-bottom: 16px;
 }
 .card h2 {
-  font-family: var(--font-display);
-  font-size: 22px;
-  font-weight: 500;
+  font-family: var(--font-body);
+  font-size: 20px;
+  font-weight: 600;
   margin-bottom: 6px;
-  color: var(--text);
+  color: #ffffff;
 }
 .card .hint {
   font-size: 13px;
-  color: var(--text-muted);
+  color: var(--steam-text-dim);
   margin-bottom: 20px;
-  line-height: 1.5;
+  line-height: 1.6;
 }
 .card .hint a {
-  color: var(--gold);
+  color: var(--steam-blue-light);
   text-decoration: none;
 }
 .card .hint a:hover {
   text-decoration: underline;
 }
+.card .divider {
+  border: none;
+  border-top: 1px solid #2a475e;
+  margin: 20px 0;
+}
 label {
   display: block;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  color: var(--text-muted);
+  color: var(--steam-text-dim);
   margin-bottom: 6px;
   margin-top: 16px;
 }
@@ -798,22 +802,35 @@ label:first-of-type { margin-top: 0; }
 input[type="text"], input[type="password"], input[type="number"], input[type="date"] {
   width: 100%;
   padding: 10px 14px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  color: var(--text);
+  background: #32404e;
+  border: 1px solid #556772;
+  border-radius: 4px;
+  color: var(--steam-text);
   font-family: var(--font-mono);
   font-size: 14px;
-  transition: border-color 0.2s;
+  transition: all 0.2s;
   outline: none;
 }
 input:focus {
-  border-color: var(--border-focus);
+  border-color: var(--steam-blue-light);
+  box-shadow: 0 0 8px rgba(102,192,244,0.3);
 }
 input::placeholder {
-  color: var(--text-muted);
-  opacity: 0.6;
+  color: var(--steam-text-dark);
+  opacity: 0.8;
 }
+/* Key status indicators */
+.key-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  margin-left: 8px;
+}
+.key-status.ok { color: var(--steam-green-bright); }
+.key-status.fail { color: #c45a5a; }
+.key-status.pending { color: var(--steam-text-dark); }
 /* Toggle */
 .toggle-row {
   display: flex;
@@ -824,7 +841,7 @@ input::placeholder {
 .toggle {
   width: 44px;
   height: 24px;
-  background: var(--border);
+  background: #32404e;
   border-radius: 12px;
   position: relative;
   cursor: pointer;
@@ -832,7 +849,7 @@ input::placeholder {
   flex-shrink: 0;
 }
 .toggle.on {
-  background: var(--green);
+  background: var(--steam-green);
 }
 .toggle::after {
   content: '';
@@ -850,7 +867,7 @@ input::placeholder {
 }
 .toggle-label {
   font-size: 14px;
-  color: var(--text-dim);
+  color: var(--steam-text-dim);
 }
 .tg-fields {
   display: none;
@@ -865,38 +882,54 @@ input::placeholder {
   align-items: flex-end;
   margin-bottom: 12px;
   padding: 12px;
-  background: rgba(0,0,0,0.2);
-  border-radius: 8px;
-  border: 1px solid rgba(58,32,48,0.3);
+  background: rgba(0,0,0,0.25);
+  border-radius: 4px;
+  border: 1px solid rgba(42,71,94,0.4);
 }
 .game-item .field { flex: 1; }
 .game-item .field label { margin-top: 0; }
+.game-item .field .field-hint {
+  font-size: 11px;
+  color: var(--steam-text-dark);
+  margin-top: 4px;
+}
 .game-item .remove-btn {
   background: rgba(196,90,90,0.15);
   border: 1px solid rgba(196,90,90,0.3);
-  color: var(--red);
+  color: #c45a5a;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
   font-size: 13px;
   margin-bottom: 0;
   height: 38px;
 }
+.game-item .game-status {
+  font-size: 12px;
+  font-family: var(--font-mono);
+  margin-bottom: 0;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  min-width: 20px;
+}
+.game-item .game-status.ok { color: var(--steam-green-bright); }
+.game-item .game-status.fail { color: #c45a5a; }
 .add-game-btn {
   background: transparent;
-  border: 1px dashed var(--border);
-  color: var(--text-muted);
+  border: 1px dashed #2a475e;
+  color: var(--steam-text-dark);
   padding: 10px;
   width: 100%;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   font-family: var(--font-body);
   font-size: 13px;
   transition: all 0.2s;
 }
 .add-game-btn:hover {
-  border-color: var(--accent);
-  color: var(--text-dim);
+  border-color: var(--steam-blue-light);
+  color: var(--steam-text-dim);
 }
 /* Accent picker */
 .accent-grid {
@@ -907,18 +940,18 @@ input::placeholder {
 .accent-swatch {
   width: 40px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   border: 2px solid transparent;
   transition: all 0.2s;
   position: relative;
 }
 .accent-swatch.selected {
-  border-color: var(--text);
-  box-shadow: 0 0 12px rgba(255,255,255,0.15);
+  border-color: #ffffff;
+  box-shadow: 0 0 12px rgba(102,192,244,0.3);
 }
 .accent-swatch.selected::after {
-  content: '\u2713';
+  content: '\\2713';
   position: absolute;
   inset: 0;
   display: flex;
@@ -929,33 +962,6 @@ input::placeholder {
   font-size: 16px;
   text-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
-/* Theme selector */
-.theme-grid {
-  display: flex;
-  gap: 12px;
-}
-.theme-option {
-  flex: 1;
-  padding: 16px;
-  border-radius: 8px;
-  border: 2px solid var(--border);
-  cursor: pointer;
-  text-align: center;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.2s;
-}
-.theme-option.selected {
-  border-color: var(--accent);
-}
-.theme-option.dark-opt {
-  background: #1a0f14;
-  color: #e8ddd0;
-}
-.theme-option.light-opt {
-  background: #f5f2ef;
-  color: #2a2420;
-}
 /* Language selector */
 .lang-grid {
   display: flex;
@@ -964,26 +970,28 @@ input::placeholder {
 .lang-option {
   flex: 1;
   padding: 14px;
-  border-radius: 8px;
-  border: 2px solid var(--border);
+  border-radius: 4px;
+  border: 2px solid #2a475e;
   cursor: pointer;
   text-align: center;
   font-size: 15px;
   font-weight: 500;
   transition: all 0.2s;
-  color: var(--text-dim);
+  color: var(--steam-text-dim);
+  background: transparent;
 }
 .lang-option.selected {
-  border-color: var(--accent);
-  color: var(--text);
+  border-color: var(--steam-blue-light);
+  color: #ffffff;
+  background: rgba(102,192,244,0.08);
 }
-/* Test button */
+/* Test button — Steam green */
 .test-btn {
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
+  background: linear-gradient(to right, #75b022, #588a1b);
   border: none;
-  color: white;
+  color: #d2efa9;
   padding: 10px 20px;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   font-family: var(--font-body);
   font-size: 14px;
@@ -992,38 +1000,49 @@ input::placeholder {
   transition: all 0.2s;
 }
 .test-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(168,74,86,0.3);
+  background: linear-gradient(to right, #8ecb2a, #6aa020);
+  color: #ffffff;
+}
+.test-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 .test-result {
   margin-top: 10px;
   font-size: 13px;
   font-family: var(--font-mono);
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: 10px 14px;
+  border-radius: 4px;
   display: none;
+  line-height: 1.6;
 }
 .test-result.success {
   display: block;
-  background: rgba(90,154,94,0.1);
-  border: 1px solid rgba(90,154,94,0.3);
-  color: var(--green);
+  background: rgba(92,126,16,0.15);
+  border: 1px solid rgba(164,208,7,0.3);
+  color: var(--steam-green-bright);
 }
 .test-result.error {
   display: block;
   background: rgba(196,90,90,0.1);
   border: 1px solid rgba(196,90,90,0.3);
-  color: var(--red);
+  color: #c45a5a;
+}
+.test-result.partial {
+  display: block;
+  background: rgba(201,168,76,0.1);
+  border: 1px solid rgba(201,168,76,0.3);
+  color: #c9a84c;
 }
 /* Navigation buttons */
 .nav-buttons {
   display: flex;
   justify-content: space-between;
-  margin-top: 24px;
+  margin-top: 20px;
 }
 .nav-btn {
   padding: 12px 28px;
-  border-radius: 8px;
+  border-radius: 4px;
   cursor: pointer;
   font-family: var(--font-body);
   font-size: 15px;
@@ -1033,20 +1052,21 @@ input::placeholder {
 }
 .nav-btn.prev {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-dim);
+  border: 1px solid #2a475e;
+  color: var(--steam-text-dim);
 }
 .nav-btn.prev:hover {
-  border-color: var(--text-muted);
-  color: var(--text);
+  border-color: var(--steam-blue-med);
+  color: var(--steam-text);
 }
 .nav-btn.next {
-  background: linear-gradient(135deg, var(--accent), var(--accent-dim));
-  color: white;
+  background: linear-gradient(to right, rgba(102,192,244,0.25), rgba(102,192,244,0.15));
+  border: 1px solid rgba(102,192,244,0.4);
+  color: var(--steam-blue-light);
 }
 .nav-btn.next:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 4px 16px rgba(168,74,86,0.3);
+  background: linear-gradient(to right, rgba(102,192,244,0.35), rgba(102,192,244,0.25));
+  color: #ffffff;
 }
 .nav-btn:disabled {
   opacity: 0.4;
@@ -1054,37 +1074,38 @@ input::placeholder {
   transform: none !important;
 }
 .nav-btn.start {
-  background: linear-gradient(135deg, var(--green), #3a6a3e);
-  color: white;
+  background: linear-gradient(to right, #75b022, #588a1b);
+  border: none;
+  color: #d2efa9;
   font-size: 16px;
   padding: 14px 36px;
 }
 .nav-btn.start:hover {
-  box-shadow: 0 4px 16px rgba(90,154,94,0.3);
+  background: linear-gradient(to right, #8ecb2a, #6aa020);
+  color: #ffffff;
 }
 </style>
 </head>
 <body>
 <div class="wizard">
   <div class="wizard-header">
-    <h1>Steam Dashboard</h1>
-    <p>Real-time sales monitoring for your Steam games.<br>Let's get you set up in a few quick steps.</p>
+    <h1 data-i18n="setupTitle">Steam Dashboard Setup</h1>
+    <p data-i18n="setupDesc">Real-time sales monitoring for your Steam games. Let's get you set up in a few quick steps.</p>
   </div>
 
   <div class="steps-bar">
-    <div class="step-dot active" data-step="0"></div>
-    <div class="step-dot" data-step="1"></div>
-    <div class="step-dot" data-step="2"></div>
-    <div class="step-dot" data-step="3"></div>
-    <div class="step-dot" data-step="4"></div>
-    <div class="step-dot" data-step="5"></div>
+    <div class="step-dot active" data-step="0" data-i18n="stepWelcome">INTRO</div>
+    <div class="step-dot" data-step="1" data-i18n="stepConnection">CONNECT</div>
+    <div class="step-dot" data-step="2" data-i18n="stepTelegram">ALERTS</div>
+    <div class="step-dot" data-step="3" data-i18n="stepPrefs">PREFS</div>
+    <div class="step-dot" data-step="4" data-i18n="stepConfirm">GO</div>
   </div>
 
   <!-- Step 0: Welcome -->
   <div class="step-panel active" data-step="0">
     <div class="card">
-      <h2>Welcome</h2>
-      <div class="hint">
+      <h2 data-i18n="welcomeTitle">Welcome</h2>
+      <div class="hint" data-i18n-html="welcomeHint">
         This dashboard tracks your Steam game's sales, revenue, reviews,
         concurrent players, and wishlists in real-time. It can also send
         you Telegram alerts when something happens.
@@ -1097,117 +1118,214 @@ input::placeholder {
     </div>
   </div>
 
-  <!-- Step 1: API Keys -->
+  <!-- Step 1: Steam Connection (API Keys + Games + Test) -->
   <div class="step-panel" data-step="1">
     <div class="card">
-      <h2>Steam API Keys</h2>
-      <div class="hint">
-        Your Steam Web API key is used for public data (player counts, reviews).
-        Get one at <a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>.
+      <h2 data-i18n="connectionTitle">Steam Connection</h2>
+      <div class="hint" data-i18n-html="connectionHint">
+        Enter your API keys and add games to monitor. Test the connection before proceeding.
       </div>
-      <label>Steam Web API Key</label>
+
+      <label>Steam Web API Key <span class="key-status pending" id="apiKeyStatus"></span></label>
       <input type="password" id="steamApiKey" placeholder="E719B9C8C920A1EB..." />
-
-      <div class="hint" style="margin-top:20px;">
-        The Financial API key is for sales and wishlist data from the Steamworks Partner site.
+      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;" data-i18n-html="apiKeyPath">
+        <a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>
       </div>
-      <label>Steam Financial API Key</label>
-      <input type="password" id="steamFinancialKey" placeholder="064E0AB9C952..." />
-    </div>
-  </div>
 
-  <!-- Step 2: Games -->
-  <div class="step-panel" data-step="2">
-    <div class="card">
-      <h2>Your Games</h2>
-      <div class="hint">Add one or more games to monitor. The game name will be fetched automatically from Steam.</div>
+      <label style="margin-top:18px;">Steam Financial API Key <span class="key-status pending" id="finKeyStatus"></span></label>
+      <input type="password" id="steamFinancialKey" placeholder="064E0AB9C952..." />
+      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;" data-i18n-html="finKeyPath">
+        Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [group] &rarr; Web API Key
+      </div>
+
+      <hr class="divider">
+
+      <h2 data-i18n="gamesTitle" style="margin-top:0;">Your Games</h2>
+      <div class="hint" data-i18n="gamesHint">Add one or more games to monitor. The game name will be fetched automatically.</div>
       <div id="gamesList"></div>
-      <button class="add-game-btn" onclick="addGameRow()">+ Add Another Game</button>
-      <button class="test-btn" onclick="testConnection()" style="margin-top:16px;">Test Connection</button>
+      <button class="add-game-btn" onclick="addGameRow()" data-i18n="addGame">+ Add Another Game</button>
+
+      <button class="test-btn" id="testBtn" onclick="testConnection()" data-i18n="testConnection">Test Connection</button>
       <div class="test-result" id="testResult"></div>
     </div>
   </div>
 
-  <!-- Step 3: Telegram -->
-  <div class="step-panel" data-step="3">
+  <!-- Step 2: Telegram -->
+  <div class="step-panel" data-step="2">
     <div class="card">
-      <h2>Telegram Alerts</h2>
-      <div class="hint">Get instant notifications for new sales, reviews, and player spikes. This is optional.</div>
+      <h2 data-i18n="telegramTitle">Telegram Alerts</h2>
+      <div class="hint" data-i18n="telegramHint">Get instant notifications for new sales, reviews, and player spikes. This is optional.</div>
       <div class="toggle-row">
         <div class="toggle" id="tgToggle" onclick="toggleTelegram()"></div>
-        <span class="toggle-label">Enable Telegram alerts</span>
+        <span class="toggle-label" data-i18n="enableTelegram">Enable Telegram alerts</span>
       </div>
       <div class="tg-fields" id="tgFields">
-        <label>Bot Token</label>
+        <label data-i18n="botTokenLabel">Bot Token</label>
         <input type="password" id="tgBotToken" placeholder="123456:ABC-DEF..." />
-        <label>Chat IDs (comma-separated)</label>
+        <label data-i18n="chatIdsLabel">Chat IDs (comma-separated)</label>
         <input type="text" id="tgChatIds" placeholder="7271353545, 8264620489" />
       </div>
     </div>
   </div>
 
-  <!-- Step 4: Preferences -->
-  <div class="step-panel" data-step="4">
+  <!-- Step 3: Preferences -->
+  <div class="step-panel" data-step="3">
     <div class="card">
-      <h2>Preferences</h2>
-      <div class="hint">Customize the look and feel of your dashboard.</div>
+      <h2 data-i18n="prefsTitle">Preferences</h2>
+      <div class="hint" data-i18n="prefsHint">Customize the look and feel of your dashboard.</div>
 
-      <label>Language</label>
+      <label data-i18n="languageLabel">Language</label>
       <div class="lang-grid">
         <div class="lang-option selected" data-lang="en" onclick="selectLang('en')">English</div>
         <div class="lang-option" data-lang="ko" onclick="selectLang('ko')">Korean</div>
       </div>
 
-      <label style="margin-top:20px;">Theme</label>
-      <div class="theme-grid">
-        <div class="theme-option dark-opt selected" data-theme="dark" onclick="selectTheme('dark')">Dark</div>
-        <div class="theme-option light-opt" data-theme="light" onclick="selectTheme('light')">Light</div>
-      </div>
-
-      <label style="margin-top:20px;">Accent Color</label>
+      <label style="margin-top:20px;" data-i18n="accentLabel">Accent Color</label>
       <div class="accent-grid">
-        <div class="accent-swatch selected" data-accent="wine" onclick="selectAccent('wine')" style="background: linear-gradient(135deg, #a84a56, #722f37);"></div>
-        <div class="accent-swatch" data-accent="ocean" onclick="selectAccent('ocean')" style="background: linear-gradient(135deg, #4a8aaa, #2f5a72);"></div>
-        <div class="accent-swatch" data-accent="forest" onclick="selectAccent('forest')" style="background: linear-gradient(135deg, #5a9a5e, #2f6a37);"></div>
-        <div class="accent-swatch" data-accent="amber" onclick="selectAccent('amber')" style="background: linear-gradient(135deg, #c9a84c, #8a7434);"></div>
-        <div class="accent-swatch" data-accent="slate" onclick="selectAccent('slate')" style="background: linear-gradient(135deg, #7a8a9a, #4a5a6a);"></div>
+        <div class="accent-swatch selected" data-accent="steam" onclick="selectAccent('steam')" style="background: linear-gradient(135deg, #66c0f4, #2a475e);" title="Steam Blue"></div>
+        <div class="accent-swatch" data-accent="emerald" onclick="selectAccent('emerald')" style="background: linear-gradient(135deg, #5c7e10, #3d5a0a);" title="Emerald"></div>
+        <div class="accent-swatch" data-accent="amber" onclick="selectAccent('amber')" style="background: linear-gradient(135deg, #c9a84c, #8a7434);" title="Amber"></div>
+        <div class="accent-swatch" data-accent="coral" onclick="selectAccent('coral')" style="background: linear-gradient(135deg, #c45a5a, #8a3434);" title="Coral"></div>
+        <div class="accent-swatch" data-accent="violet" onclick="selectAccent('violet')" style="background: linear-gradient(135deg, #7a5aaa, #4a3a6a);" title="Violet"></div>
       </div>
 
-      <label style="margin-top:20px;">Port</label>
+      <label style="margin-top:20px;" data-i18n="portLabel">Port</label>
       <input type="number" id="portInput" value="{{PORT}}" min="1024" max="65535" />
     </div>
   </div>
 
-  <!-- Step 5: Confirm -->
-  <div class="step-panel" data-step="5">
+  <!-- Step 4: Confirm -->
+  <div class="step-panel" data-step="4">
     <div class="card" style="text-align:center;">
-      <h2>Ready to Go</h2>
-      <div class="hint" style="margin-bottom:8px;">
-        Your dashboard will start collecting data immediately after setup.<br>
+      <h2 data-i18n="readyTitle">Ready to Go</h2>
+      <div class="hint" style="margin-bottom:8px;" data-i18n="readyHint">
+        Your dashboard will start collecting data immediately after setup.
         The first data collection may take a few minutes depending on how many days since launch.
       </div>
-      <div id="setupSummary" style="text-align:left;font-family:var(--font-mono);font-size:13px;color:var(--text-dim);margin:20px 0;padding:16px;background:rgba(0,0,0,0.3);border-radius:8px;"></div>
+      <div id="setupSummary" style="text-align:left;font-family:var(--font-mono);font-size:13px;color:var(--steam-text-dim);margin:20px 0;padding:16px;background:rgba(0,0,0,0.3);border-radius:4px;border:1px solid #2a475e;"></div>
     </div>
   </div>
 
   <div class="nav-buttons">
-    <button class="nav-btn prev" id="prevBtn" onclick="prevStep()" style="visibility:hidden;">Back</button>
-    <button class="nav-btn next" id="nextBtn" onclick="nextStep()">Next</button>
+    <button class="nav-btn prev" id="prevBtn" onclick="prevStep()" style="visibility:hidden;" data-i18n="btnBack">Back</button>
+    <button class="nav-btn next" id="nextBtn" onclick="nextStep()" data-i18n="btnNext">Next</button>
   </div>
 </div>
 
 <script>
 (function() {
+  var browserLang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
+  var currentLang = localStorage.getItem('dashLang') || browserLang;
+
+  var i18n = {
+    ko: {
+      setupTitle: 'Steam \\ub300\\uc2dc\\ubcf4\\ub4dc \\uc124\\uc815',
+      setupDesc: 'Steam \\uac8c\\uc784\\uc758 \\ud310\\ub9e4, \\uc218\\uc775, \\ub9ac\\ubdf0, \\ub3d9\\uc811\\uc790, \\uc704\\uc2dc\\ub9ac\\uc2a4\\ud2b8\\ub97c \\uc2e4\\uc2dc\\uac04\\uc73c\\ub85c \\ubaa8\\ub2c8\\ud130\\ub9c1\\ud569\\ub2c8\\ub2e4.',
+      stepWelcome: '\\uc18c\\uac1c', stepConnection: '\\uc5f0\\uacb0', stepTelegram: '\\uc54c\\ub9bc', stepPrefs: '\\uc124\\uc815', stepConfirm: '\\uc2dc\\uc791',
+      welcomeTitle: '\\ud658\\uc601\\ud569\\ub2c8\\ub2e4',
+      welcomeHint: '\\uc774 \\ub300\\uc2dc\\ubcf4\\ub4dc\\ub294 Steam \\uac8c\\uc784\\uc758 \\ud310\\ub9e4, \\uc218\\uc775, \\ub9ac\\ubdf0, \\ub3d9\\uc2dc \\uc811\\uc18d\\uc790, \\uc704\\uc2dc\\ub9ac\\uc2a4\\ud2b8\\ub97c \\uc2e4\\uc2dc\\uac04\\uc73c\\ub85c \\ucd94\\uc801\\ud569\\ub2c8\\ub2e4. \\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc\\ub3c4 \\ubcf4\\ub0bc \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.<br><br>\\ud544\\uc694\\ud55c \\uac83:<br>&bull; <a href="https://steamcommunity.com/dev/apikey" target="_blank">Steam Web API \\ud0a4</a><br>&bull; <a href="https://partner.steampowered.com/" target="_blank">Steamworks Financial API \\ud0a4</a> (Partner \\uc0ac\\uc774\\ud2b8\\uc5d0\\uc11c)<br>&bull; \\uac8c\\uc784\\uc758 App ID',
+      connectionTitle: 'Steam \\uc5f0\\uacb0',
+      connectionHint: 'API \\ud0a4\\ub97c \\uc785\\ub825\\ud558\\uace0 \\ubaa8\\ub2c8\\ud130\\ub9c1\\ud560 \\uac8c\\uc784\\uc744 \\ucd94\\uac00\\ud558\\uc138\\uc694. \\uc9c4\\ud589 \\uc804\\uc5d0 \\uc5f0\\uacb0\\uc744 \\ud14c\\uc2a4\\ud2b8\\ud574\\uc8fc\\uc138\\uc694.',
+      apiKeyPath: '<a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>',
+      finKeyPath: 'Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [\\uadf8\\ub8f9] &rarr; Web API Key',
+      gamesTitle: '\\uac8c\\uc784 \\ucd94\\uac00',
+      gamesHint: '\\ubaa8\\ub2c8\\ud130\\ub9c1\\ud560 \\uac8c\\uc784\\uc744 \\ucd94\\uac00\\ud558\\uc138\\uc694. \\uac8c\\uc784 \\uc774\\ub984\\uc740 \\uc790\\ub3d9\\uc73c\\ub85c \\uac00\\uc838\\uc635\\ub2c8\\ub2e4.',
+      launchDateHint: '\\uac8c\\uc784 \\ucd9c\\uc2dc\\uc77c \\ub610\\ub294 EA \\uc2dc\\uc791\\uc77c. \\uc774 \\ub0a0\\uc9dc\\ubd80\\ud130 \\ud310\\ub9e4 \\ub370\\uc774\\ud130\\ub97c \\uc218\\uc9d1\\ud569\\ub2c8\\ub2e4.',
+      addGame: '+ \\uac8c\\uc784 \\ucd94\\uac00',
+      testConnection: '\\uc5f0\\uacb0 \\ud14c\\uc2a4\\ud2b8',
+      telegramTitle: '\\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc',
+      telegramHint: '\\uc0c8 \\ud310\\ub9e4, \\ub9ac\\ubdf0, \\ub3d9\\uc811\\uc790 \\uae09\\uc99d \\uc2dc \\uc989\\uc2dc \\uc54c\\ub9bc\\uc744 \\ubc1b\\uc2b5\\ub2c8\\ub2e4. \\uc120\\ud0dd\\uc0ac\\ud56d\\uc785\\ub2c8\\ub2e4.',
+      enableTelegram: '\\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc \\ud65c\\uc131\\ud654',
+      botTokenLabel: '\\ubd07 \\ud1a0\\ud070',
+      chatIdsLabel: '\\ucc44\\ud305 ID (\\uc27c\\ud45c\\ub85c \\uad6c\\ubd84)',
+      prefsTitle: '\\ud658\\uacbd \\uc124\\uc815',
+      prefsHint: '\\ub300\\uc2dc\\ubcf4\\ub4dc\\uc758 \\uc678\\uad00\\uc744 \\ucee4\\uc2a4\\ud130\\ub9c8\\uc774\\uc988\\ud558\\uc138\\uc694.',
+      languageLabel: '\\uc5b8\\uc5b4',
+      accentLabel: '\\uc561\\uc13c\\ud2b8 \\uc0c9\\uc0c1',
+      portLabel: '\\ud3ec\\ud2b8',
+      readyTitle: '\\uc900\\ube44 \\uc644\\ub8cc',
+      readyHint: '\\uc124\\uc815 \\uc644\\ub8cc \\ud6c4 \\uc989\\uc2dc \\ub370\\uc774\\ud130 \\uc218\\uc9d1\\uc744 \\uc2dc\\uc791\\ud569\\ub2c8\\ub2e4. \\ucd9c\\uc2dc\\uc77c \\uc774\\ud6c4 \\uacbd\\uacfc \\uc77c\\uc218\\uc5d0 \\ub530\\ub77c \\uccab \\uc218\\uc9d1\\uc5d0 \\uc218\\ubd84\\uc774 \\uc18c\\uc694\\ub420 \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.',
+      btnBack: '\\uc774\\uc804',
+      btnNext: '\\ub2e4\\uc74c',
+      btnStart: '\\ubaa8\\ub2c8\\ud130\\ub9c1 \\uc2dc\\uc791',
+      saving: '\\uc800\\uc7a5 \\uc911...',
+      testTesting: '\\ud14c\\uc2a4\\ud2b8 \\uc911...',
+      testApiOk: 'Web API \\ud0a4 \\ud655\\uc778',
+      testFinOk: 'Financial API \\ud0a4 \\ud655\\uc778',
+      testFinFail: 'Financial API \\ud0a4 \\uc624\\ub958 (\\ud310\\ub9e4 \\ub370\\uc774\\ud130 \\uc81c\\uc678)',
+      testGameOk: '\\ud655\\uc778',
+      testGameFail: '\\uc2e4\\ud328',
+      testFillFirst: 'API \\ud0a4\\uc640 App ID\\ub97c \\uba3c\\uc800 \\uc785\\ub825\\ud574\\uc8fc\\uc138\\uc694.',
+      testMustPass: '\\uc5f0\\uacb0 \\ud14c\\uc2a4\\ud2b8\\ub97c \\ud1b5\\uacfc\\ud574\\uc57c \\ub2e4\\uc74c\\uc73c\\ub85c \\uc9c4\\ud589\\ud560 \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.',
+      addGameAlert: '\\uac8c\\uc784\\uc744 \\ucd5c\\uc18c 1\\uac1c \\ucd94\\uac00\\ud574\\uc8fc\\uc138\\uc694.'
+    },
+    en: {
+      setupTitle: 'Steam Dashboard Setup',
+      setupDesc: 'Real-time sales monitoring for your Steam games. Let\\'s get you set up in a few quick steps.',
+      stepWelcome: 'INTRO', stepConnection: 'CONNECT', stepTelegram: 'ALERTS', stepPrefs: 'PREFS', stepConfirm: 'GO',
+      welcomeTitle: 'Welcome',
+      welcomeHint: 'This dashboard tracks your Steam game\\'s sales, revenue, reviews, concurrent players, and wishlists in real-time. It can also send you Telegram alerts when something happens.<br><br>You\\'ll need:<br>&bull; A <a href="https://steamcommunity.com/dev/apikey" target="_blank">Steam Web API Key</a><br>&bull; A <a href="https://partner.steampowered.com/" target="_blank">Steamworks Financial API Key</a> (from Partner site)<br>&bull; Your game\\'s App ID',
+      connectionTitle: 'Steam Connection',
+      connectionHint: 'Enter your API keys and add games to monitor. Test the connection before proceeding.',
+      apiKeyPath: '<a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>',
+      finKeyPath: 'Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [group] &rarr; Web API Key',
+      gamesTitle: 'Your Games',
+      gamesHint: 'Add one or more games to monitor. The game name will be fetched automatically.',
+      launchDateHint: 'Launch date or EA start date. Sales data is collected from this date.',
+      addGame: '+ Add Another Game',
+      testConnection: 'Test Connection',
+      telegramTitle: 'Telegram Alerts',
+      telegramHint: 'Get instant notifications for new sales, reviews, and player spikes. This is optional.',
+      enableTelegram: 'Enable Telegram alerts',
+      botTokenLabel: 'Bot Token',
+      chatIdsLabel: 'Chat IDs (comma-separated)',
+      prefsTitle: 'Preferences',
+      prefsHint: 'Customize the look and feel of your dashboard.',
+      languageLabel: 'Language',
+      accentLabel: 'Accent Color',
+      portLabel: 'Port',
+      readyTitle: 'Ready to Go',
+      readyHint: 'Your dashboard will start collecting data immediately after setup. The first data collection may take a few minutes depending on how many days since launch.',
+      btnBack: 'Back',
+      btnNext: 'Next',
+      btnStart: 'Start Monitoring',
+      saving: 'Saving...',
+      testTesting: 'Testing...',
+      testApiOk: 'Web API key verified',
+      testFinOk: 'Financial API key verified',
+      testFinFail: 'Financial API key error (sales data excluded)',
+      testGameOk: 'OK',
+      testGameFail: 'Failed',
+      testFillFirst: 'Please fill in the API key and at least one App ID first.',
+      testMustPass: 'Connection test must pass before proceeding.',
+      addGameAlert: 'Please add at least one game.'
+    }
+  };
+
+  function T(key) { return (i18n[currentLang] || i18n.en)[key] || (i18n.en)[key] || key; }
+
+  function applyI18n() {
+    document.querySelectorAll('[data-i18n]').forEach(function(el) {
+      var key = el.getAttribute('data-i18n');
+      if (el.tagName === 'INPUT') return;
+      el.textContent = T(key);
+    });
+    document.querySelectorAll('[data-i18n-html]').forEach(function(el) {
+      el.innerHTML = T(el.getAttribute('data-i18n-html'));
+    });
+  }
+
   var currentStep = 0;
-  var totalSteps = 6;
-  var selectedLang = 'en';
-  var selectedTheme = 'dark';
-  var selectedAccent = 'wine';
+  var totalSteps = 5;
+  var selectedLang = currentLang;
+  var selectedAccent = 'steam';
   var tgEnabled = false;
+  var connectionTested = false;
 
   // Pre-fill if editing settings
   var existingSettings = {{EXISTING_SETTINGS_JSON}};
   if (existingSettings && existingSettings.steam_api_key) {
+    connectionTested = true;
     document.getElementById('steamApiKey').value = existingSettings.steam_api_key || '';
     document.getElementById('steamFinancialKey').value = existingSettings.steam_financial_key || '';
     var tg = existingSettings.telegram || {};
@@ -1219,12 +1337,11 @@ input::placeholder {
       document.getElementById('tgChatIds').value = (tg.chat_ids || []).join(', ');
     }
     var dash = existingSettings.dashboard || {};
-    selectedLang = dash.language || 'en';
-    selectedTheme = dash.theme || 'dark';
-    selectedAccent = dash.accent || 'wine';
+    selectedLang = dash.language || currentLang;
+    currentLang = selectedLang;
+    selectedAccent = dash.accent || 'steam';
     if (dash.port) document.getElementById('portInput').value = dash.port;
     selectLang(selectedLang);
-    selectTheme(selectedTheme);
     selectAccent(selectedAccent);
   }
 
@@ -1241,7 +1358,8 @@ input::placeholder {
       div.className = 'game-item';
       div.innerHTML =
         '<div class="field"><label>App ID</label><input type="text" value="' + (g.app_id || '') + '" onchange="updateGame(' + i + ',\\'app_id\\',this.value)" placeholder="4451370" /></div>' +
-        '<div class="field"><label>Launch Date</label><input type="date" value="' + (g.launch_date || '') + '" onchange="updateGame(' + i + ',\\'launch_date\\',this.value)" /></div>' +
+        '<div class="field"><label>Launch Date</label><input type="date" value="' + (g.launch_date || '') + '" onchange="updateGame(' + i + ',\\'launch_date\\',this.value)" /><div class="field-hint" data-i18n="launchDateHint">' + T('launchDateHint') + '</div></div>' +
+        '<div class="game-status" id="gameStatus' + i + '"></div>' +
         (games.length > 1 ? '<button class="remove-btn" onclick="removeGame(' + i + ')">X</button>' : '');
       container.appendChild(div);
     });
@@ -1249,16 +1367,19 @@ input::placeholder {
 
   window.addGameRow = function() {
     games.push({ app_id: '', name: '', launch_date: '' });
+    connectionTested = false;
     renderGames();
   };
 
   window.removeGame = function(i) {
     games.splice(i, 1);
+    connectionTested = false;
     renderGames();
   };
 
   window.updateGame = function(i, field, value) {
     games[i][field] = value;
+    connectionTested = false;
   };
 
   renderGames();
@@ -1278,16 +1399,12 @@ input::placeholder {
 
   window.selectLang = function(lang) {
     selectedLang = lang;
+    currentLang = lang;
+    localStorage.setItem('dashLang', lang);
     document.querySelectorAll('.lang-option').forEach(function(el) {
       el.classList.toggle('selected', el.getAttribute('data-lang') === lang);
     });
-  };
-
-  window.selectTheme = function(theme) {
-    selectedTheme = theme;
-    document.querySelectorAll('.theme-option').forEach(function(el) {
-      el.classList.toggle('selected', el.getAttribute('data-theme') === theme);
-    });
+    applyI18n();
   };
 
   window.selectAccent = function(accent) {
@@ -1299,36 +1416,104 @@ input::placeholder {
 
   window.testConnection = function() {
     var apiKey = document.getElementById('steamApiKey').value.trim();
+    var financialKey = document.getElementById('steamFinancialKey').value.trim();
+    var validGames = games.filter(function(g) { return g.app_id; });
     var resultEl = document.getElementById('testResult');
-    if (!apiKey || !games[0] || !games[0].app_id) {
+    var testBtn = document.getElementById('testBtn');
+
+    if (!apiKey || !validGames.length) {
       resultEl.className = 'test-result error';
-      resultEl.textContent = 'Please fill in the API key and at least one App ID first.';
+      resultEl.textContent = T('testFillFirst');
       return;
     }
+
+    testBtn.disabled = true;
     resultEl.className = 'test-result';
     resultEl.style.display = 'block';
-    resultEl.style.background = 'rgba(201,168,76,0.1)';
-    resultEl.style.borderColor = 'rgba(201,168,76,0.3)';
-    resultEl.style.color = '#c9a84c';
-    resultEl.textContent = 'Testing...';
+    resultEl.style.background = 'rgba(102,192,244,0.1)';
+    resultEl.style.borderColor = 'rgba(102,192,244,0.3)';
+    resultEl.style.color = '#66c0f4';
+    resultEl.textContent = T('testTesting');
 
-    fetch('/api/test?api_key=' + encodeURIComponent(apiKey) + '&app_id=' + encodeURIComponent(games[0].app_id))
+    // Reset statuses
+    document.getElementById('apiKeyStatus').className = 'key-status pending';
+    document.getElementById('apiKeyStatus').textContent = '';
+    document.getElementById('finKeyStatus').className = 'key-status pending';
+    document.getElementById('finKeyStatus').textContent = '';
+    for (var k = 0; k < games.length; k++) {
+      var gs = document.getElementById('gameStatus' + k);
+      if (gs) { gs.textContent = ''; gs.className = 'game-status'; }
+    }
+
+    var appIds = validGames.map(function(g) { return g.app_id; }).join(',');
+    var url = '/api/test?api_key=' + encodeURIComponent(apiKey) + '&app_ids=' + encodeURIComponent(appIds);
+    if (financialKey) url += '&financial_key=' + encodeURIComponent(financialKey);
+
+    fetch(url)
       .then(function(r) { return r.json(); })
       .then(function(data) {
-        if (data.success) {
-          resultEl.className = 'test-result success';
-          resultEl.textContent = 'Connected! Game: ' + (data.name || games[0].app_id);
-          if (data.name && games[0]) {
-            games[0].name = data.name;
+        testBtn.disabled = false;
+        var lines = [];
+
+        // API key status
+        var apiSt = document.getElementById('apiKeyStatus');
+        if (data.api_key_valid) {
+          apiSt.className = 'key-status ok';
+          apiSt.textContent = '\\u2713';
+          lines.push('\\u2713 ' + T('testApiOk'));
+        } else {
+          apiSt.className = 'key-status fail';
+          apiSt.textContent = '\\u2717';
+        }
+
+        // Financial key status
+        var finSt = document.getElementById('finKeyStatus');
+        if (financialKey) {
+          if (data.financial_key_valid) {
+            finSt.className = 'key-status ok';
+            finSt.textContent = '\\u2713';
+            lines.push('\\u2713 ' + T('testFinOk'));
+          } else {
+            finSt.className = 'key-status fail';
+            finSt.textContent = '\\u2717';
+            lines.push('\\u2717 ' + T('testFinFail'));
           }
+        }
+
+        // Per-game results
+        var gameResults = data.games || [];
+        var allOk = data.api_key_valid;
+        for (var j = 0; j < gameResults.length; j++) {
+          var gr = gameResults[j];
+          var gsEl = document.getElementById('gameStatus' + j);
+          if (gr.success) {
+            if (gsEl) { gsEl.className = 'game-status ok'; gsEl.textContent = '\\u2713'; }
+            lines.push('\\u2713 ' + gr.app_id + (gr.name ? ' (' + gr.name + ')' : ''));
+            if (gr.name && games[j]) games[j].name = gr.name;
+          } else {
+            allOk = false;
+            if (gsEl) { gsEl.className = 'game-status fail'; gsEl.textContent = '\\u2717'; }
+            lines.push('\\u2717 ' + gr.app_id + ': ' + (gr.error || 'Error'));
+          }
+        }
+
+        if (allOk) {
+          resultEl.className = 'test-result success';
+          connectionTested = true;
+        } else if (data.api_key_valid) {
+          resultEl.className = 'test-result partial';
+          connectionTested = true;
         } else {
           resultEl.className = 'test-result error';
-          resultEl.textContent = 'Failed: ' + (data.error || 'Unknown error');
+          connectionTested = false;
         }
+        resultEl.innerHTML = lines.join('<br>');
       })
       .catch(function(e) {
+        testBtn.disabled = false;
         resultEl.className = 'test-result error';
         resultEl.textContent = 'Network error: ' + e.message;
+        connectionTested = false;
       });
   };
 
@@ -1346,12 +1531,13 @@ input::placeholder {
     document.getElementById('prevBtn').style.visibility = step === 0 ? 'hidden' : 'visible';
     var nextBtn = document.getElementById('nextBtn');
     if (step === totalSteps - 1) {
-      nextBtn.textContent = 'Start Monitoring';
+      nextBtn.textContent = T('btnStart');
       nextBtn.className = 'nav-btn start';
     } else {
-      nextBtn.textContent = 'Next';
+      nextBtn.textContent = T('btnNext');
       nextBtn.className = 'nav-btn next';
     }
+    document.getElementById('prevBtn').textContent = T('btnBack');
     updateStepDots();
 
     // Build summary on last step
@@ -1359,7 +1545,7 @@ input::placeholder {
       var lines = [];
       lines.push('Games: ' + games.filter(function(g){return g.app_id;}).map(function(g){return g.app_id + (g.name ? ' (' + g.name + ')' : '');}).join(', '));
       lines.push('Telegram: ' + (tgEnabled ? 'ON' : 'OFF'));
-      lines.push('Theme: ' + selectedTheme + ' / ' + selectedAccent);
+      lines.push('Accent: ' + selectedAccent);
       lines.push('Language: ' + selectedLang);
       lines.push('Port: ' + document.getElementById('portInput').value);
       document.getElementById('setupSummary').innerHTML = lines.join('<br>');
@@ -1367,6 +1553,14 @@ input::placeholder {
   }
 
   window.nextStep = function() {
+    // Validate step 1: must pass connection test
+    if (currentStep === 1 && !connectionTested) {
+      var resultEl = document.getElementById('testResult');
+      resultEl.className = 'test-result error';
+      resultEl.textContent = T('testMustPass');
+      return;
+    }
+
     if (currentStep === totalSteps - 1) {
       submitSetup();
       return;
@@ -1387,6 +1581,7 @@ input::placeholder {
     dot.addEventListener('click', function() {
       var step = parseInt(this.getAttribute('data-step'));
       if (step <= currentStep + 1) {
+        if (currentStep === 1 && step > 1 && !connectionTested) return;
         currentStep = step;
         showStep(currentStep);
       }
@@ -1396,7 +1591,7 @@ input::placeholder {
   function submitSetup() {
     var validGames = games.filter(function(g) { return g.app_id; });
     if (!validGames.length) {
-      alert('Please add at least one game.');
+      alert(T('addGameAlert'));
       return;
     }
 
@@ -1416,14 +1611,14 @@ input::placeholder {
         port: parseInt(document.getElementById('portInput').value) || 8081,
         poll_interval: 300,
         language: selectedLang,
-        theme: selectedTheme,
+        theme: 'dark',
         accent: selectedAccent
       }
     };
 
     var nextBtn = document.getElementById('nextBtn');
     nextBtn.disabled = true;
-    nextBtn.textContent = 'Saving...';
+    nextBtn.textContent = T('saving');
 
     var endpoint = existingSettings && existingSettings.steam_api_key ? '/api/settings' : '/api/setup';
 
@@ -1436,15 +1631,17 @@ input::placeholder {
         window.location.href = '/';
       } else {
         nextBtn.disabled = false;
-        nextBtn.textContent = 'Start Monitoring';
+        nextBtn.textContent = T('btnStart');
         alert('Error: ' + (data.error || 'Unknown'));
       }
     }).catch(function(e) {
       nextBtn.disabled = false;
-      nextBtn.textContent = 'Start Monitoring';
+      nextBtn.textContent = T('btnStart');
       alert('Network error: ' + e.message);
     });
   }
+
+  applyI18n();
 })();
 </script>
 </body>
@@ -1458,82 +1655,60 @@ DASHBOARD_HTML_TEMPLATE = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMxNzFhMjEiLz4KICA8cmVjdCB4PSIxMCIgeT0iMjIiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMiIgcng9IjMiIGZpbGw9IiMxYjI4MzgiIG9wYWNpdHk9IjAuNiIvPgogIDxyZWN0IHg9IjE0IiB5PSI0MCIgd2lkdGg9IjYiIGhlaWdodD0iMTIiIHJ4PSIxIiBmaWxsPSIjMmE0NzVlIi8+CiAgPHJlY3QgeD0iMjIiIHk9IjM0IiB3aWR0aD0iNiIgaGVpZ2h0PSIxOCIgcng9IjEiIGZpbGw9IiMzZDZjOGUiLz4KICA8cmVjdCB4PSIzMCIgeT0iMjgiIHdpZHRoPSI2IiBoZWlnaHQ9IjI0IiByeD0iMSIgZmlsbD0iIzY2YzBmNCIvPgogIDxyZWN0IHg9IjM4IiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iMjAiIHJ4PSIxIiBmaWxsPSIjNjZjMGY0Ii8+CiAgPHJlY3QgeD0iNDYiIHk9IjI0IiB3aWR0aD0iNiIgaGVpZ2h0PSIyOCIgcng9IjEiIGZpbGw9IiM2NmMwZjQiLz4KICA8cG9seWxpbmUgcG9pbnRzPSIxNywzOCAyNSwzMiAzMywyNiA0MSwzMCA0OSwyMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTRkMDA3IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTciIGN5PSIzOCIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iMzMiIGN5PSIyNiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iNDkiIGN5PSIyMiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+Cjwvc3ZnPg==">
 <title>Steam Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Crimson+Pro:wght@400;500;600;700&family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --font-display: 'Crimson Pro', Georgia, serif;
-  --font-body: 'DM Sans', -apple-system, sans-serif;
+  --font-body: 'Noto Sans KR', 'Noto Sans', -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-sm: 4px;
+  --radius-md: 4px;
   --ease-out: cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* ---- ACCENT COLORS ---- */
-:root[data-accent="wine"] {
-  --accent: #a84a56; --accent-dim: #722f37;
-  --accent-glow: rgba(168,74,86,0.2); --accent-fill: rgba(168,74,86,0.08);
+:root[data-accent="steam"] {
+  --accent: #66c0f4; --accent-dim: #2a475e;
+  --accent-glow: rgba(102,192,244,0.2); --accent-fill: rgba(102,192,244,0.08);
 }
-:root[data-accent="ocean"] {
-  --accent: #4a8aaa; --accent-dim: #2f5a72;
-  --accent-glow: rgba(74,138,170,0.2); --accent-fill: rgba(74,138,170,0.08);
-}
-:root[data-accent="forest"] {
-  --accent: #5a9a5e; --accent-dim: #2f6a37;
-  --accent-glow: rgba(90,154,94,0.2); --accent-fill: rgba(90,154,94,0.08);
+:root[data-accent="emerald"] {
+  --accent: #5c7e10; --accent-dim: #3d5a0a;
+  --accent-glow: rgba(92,126,16,0.2); --accent-fill: rgba(92,126,16,0.08);
 }
 :root[data-accent="amber"] {
   --accent: #c9a84c; --accent-dim: #8a7434;
   --accent-glow: rgba(201,168,76,0.2); --accent-fill: rgba(201,168,76,0.08);
 }
-:root[data-accent="slate"] {
-  --accent: #7a8a9a; --accent-dim: #4a5a6a;
-  --accent-glow: rgba(122,138,154,0.2); --accent-fill: rgba(122,138,154,0.08);
+:root[data-accent="coral"] {
+  --accent: #c45a5a; --accent-dim: #8a3434;
+  --accent-glow: rgba(196,90,90,0.2); --accent-fill: rgba(196,90,90,0.08);
+}
+:root[data-accent="violet"] {
+  --accent: #7a5aaa; --accent-dim: #4a3a6a;
+  --accent-glow: rgba(122,90,170,0.2); --accent-fill: rgba(122,90,170,0.08);
 }
 
-/* ---- DARK THEME ---- */
+/* ---- DARK THEME (Steam native) ---- */
 :root[data-theme="dark"] {
-  --bg-black: #080509; --bg-deep: #0d0a0e; --bg-mid: #1a0f14;
-  --bg-surface: #241520; --bg-elevated: #2e1a28;
-  --border-color: #3a2030; --border-light: #4a2a3c;
-  --text-primary: #e8ddd0; --text-secondary: #9a8878;
-  --text-tertiary: #6a5a4e; --text-accent: #d4c0a0;
-  --gold: #c9a84c; --gold-bright: #dbb94e; --gold-dim: #8a7434;
-  --gold-fill: rgba(201,168,76,0.08);
-  --green: #5a9a5e; --green-bright: #6cc070; --green-dim: #3a6a3e;
-  --green-fill: rgba(90,154,94,0.06);
-  --red: #c45a5a; --purple: #8b5a8a; --purple-fill: rgba(139,90,138,0.08);
-  --chart-grid: rgba(58,32,48,0.3); --chart-tick: #6a5a4e; --chart-legend: #9a8878;
-  --tooltip-bg: rgba(13,10,14,0.95); --tooltip-border: rgba(201,168,76,0.2);
-  --status-bg: rgba(8,5,9,0.9);
-  --header-bg: linear-gradient(165deg, #0d0a0e 0%, #1a0a10 40%, #200e18 100%);
-  --header-glow: rgba(114,47,55,0.12);
-  --shimmer-a: #241520; --shimmer-b: #2e1a28;
-  --review-hover: rgba(114,47,55,0.08);
-}
-
-/* ---- LIGHT THEME ---- */
-:root[data-theme="light"] {
-  --bg-black: #f5f2ef; --bg-deep: #f0ece8; --bg-mid: #faf8f6;
-  --bg-surface: #ffffff; --bg-elevated: #ffffff;
-  --border-color: #e0d8d0; --border-light: #d0c8c0;
-  --text-primary: #2a2420; --text-secondary: #6a5a50;
-  --text-tertiary: #9a8a80; --text-accent: #4a3a30;
-  --gold: #b89830; --gold-bright: #c9a84c; --gold-dim: #8a7434;
-  --gold-fill: rgba(184,152,48,0.1);
-  --green: #3a8a3e; --green-bright: #4a9a50; --green-dim: #2a6a2e;
-  --green-fill: rgba(58,138,62,0.08);
-  --red: #c04040; --purple: #7a4a7a; --purple-fill: rgba(122,74,122,0.08);
-  --chart-grid: rgba(0,0,0,0.06); --chart-tick: #9a8a80; --chart-legend: #6a5a50;
-  --tooltip-bg: rgba(255,255,255,0.97); --tooltip-border: rgba(0,0,0,0.1);
-  --status-bg: rgba(245,242,239,0.95);
-  --header-bg: linear-gradient(165deg, #f0ece8 0%, #faf8f6 100%);
-  --header-glow: rgba(114,47,55,0.06);
-  --shimmer-a: #f0ece8; --shimmer-b: #e8e0d8;
-  --review-hover: rgba(0,0,0,0.03);
+  --bg-black: #171a21; --bg-deep: #1b2838; --bg-mid: #16202d;
+  --bg-surface: #1b2838; --bg-elevated: #2a475e;
+  --border-color: #2a475e; --border-light: #3d6c8e;
+  --text-primary: #c7d5e0; --text-secondary: #8f98a0;
+  --text-tertiary: #556772; --text-accent: #c7d5e0;
+  --gold: #66c0f4; --gold-bright: #ffffff; --gold-dim: #2a475e;
+  --gold-fill: rgba(102,192,244,0.08);
+  --green: #5c7e10; --green-bright: #a4d007; --green-dim: #3d5a0a;
+  --green-fill: rgba(92,126,16,0.08);
+  --red: #c45a5a; --purple: #66c0f4; --purple-fill: rgba(102,192,244,0.08);
+  --chart-grid: rgba(42,71,94,0.4); --chart-tick: #556772; --chart-legend: #8f98a0;
+  --tooltip-bg: rgba(22,32,45,0.97); --tooltip-border: rgba(102,192,244,0.2);
+  --status-bg: rgba(23,26,33,0.95);
+  --header-bg: linear-gradient(165deg, #171a21 0%, #1b2838 100%);
+  --header-glow: rgba(102,192,244,0.06);
+  --shimmer-a: #16202d; --shimmer-b: #2a475e;
+  --review-hover: rgba(42,71,94,0.15);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1544,18 +1719,11 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
 }
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  pointer-events: none; z-index: 0; opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-}
-:root[data-theme="light"] body::after { opacity: 0.012; }
 
 .header {
   position: relative;
   background: var(--header-bg);
-  padding: 28px 32px;
+  padding: 24px 32px;
   display: flex; align-items: center; gap: 24px;
   border-bottom: 1px solid var(--border-color);
   overflow: hidden;
@@ -1568,21 +1736,21 @@ body::after {
   pointer-events: none;
 }
 .header-img {
-  width: 180px; border-radius: var(--radius-md);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(201,168,76,0.15);
+  width: 184px; border-radius: var(--radius-sm);
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
   flex-shrink: 0;
 }
 .header-info { flex: 1; min-width: 0; }
 .header-info h1 {
-  font-family: var(--font-display); font-size: 32px; font-weight: 600;
-  color: var(--text-primary); letter-spacing: -0.02em; margin-bottom: 4px;
+  font-family: var(--font-body); font-size: 28px; font-weight: 700;
+  color: #ffffff; letter-spacing: -0.01em; margin-bottom: 4px;
 }
 .header-info .subtitle { font-size: 13px; color: var(--text-tertiary); margin-bottom: 10px; }
 .header-info .price-badge {
   display: inline-flex; align-items: center; gap: 6px;
-  background: linear-gradient(135deg, rgba(201,168,76,0.12), rgba(201,168,76,0.06));
-  border: 1px solid rgba(201,168,76,0.2);
-  color: var(--gold); padding: 5px 14px; border-radius: 6px;
+  background: linear-gradient(135deg, rgba(164,208,7,0.15), rgba(92,126,16,0.1));
+  border: 1px solid rgba(164,208,7,0.3);
+  color: var(--green-bright); padding: 5px 14px; border-radius: var(--radius-sm);
   font-family: var(--font-mono); font-size: 13px; font-weight: 500;
 }
 .header-controls {
@@ -1592,16 +1760,16 @@ body::after {
 .live-indicator {
   display: inline-flex; align-items: center; gap: 8px;
   font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--green);
+  text-transform: uppercase; color: var(--green-bright);
 }
 .live-dot {
   width: 7px; height: 7px; background: var(--green-bright);
-  border-radius: 50%; box-shadow: 0 0 8px rgba(108,192,112,0.5);
+  border-radius: 50%; box-shadow: 0 0 8px rgba(164,208,7,0.5);
   animation: livePulse 2.5s ease-in-out infinite;
 }
 @keyframes livePulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(108,192,112,0.5); }
-  50% { opacity: 0.4; box-shadow: 0 0 4px rgba(108,192,112,0.2); }
+  0%, 100% { opacity: 1; box-shadow: 0 0 8px rgba(164,208,7,0.5); }
+  50% { opacity: 0.4; box-shadow: 0 0 4px rgba(164,208,7,0.2); }
 }
 .update-time { font-size: 12px; color: var(--text-tertiary); font-family: var(--font-mono); }
 .poll-info { font-size: 11px; color: var(--text-tertiary); opacity: 0.6; }
@@ -1609,7 +1777,7 @@ body::after {
   display: flex; gap: 6px; align-items: center; margin-top: 4px;
 }
 .lang-toggle {
-  display: inline-flex; gap: 0; border-radius: 4px; overflow: hidden;
+  display: inline-flex; gap: 0; border-radius: 2px; overflow: hidden;
   border: 1px solid var(--border-color); font-size: 11px;
 }
 .lang-toggle button {
@@ -1617,10 +1785,10 @@ body::after {
   padding: 3px 8px; cursor: pointer; font-family: var(--font-mono);
   font-size: 11px; transition: all 0.2s;
 }
-.lang-toggle button.active { background: var(--bg-elevated); color: var(--text-primary); }
+.lang-toggle button.active { background: var(--bg-elevated); color: #ffffff; }
 .settings-btn {
   background: transparent; border: 1px solid var(--border-color);
-  color: var(--text-tertiary); padding: 3px 8px; border-radius: 4px;
+  color: var(--text-tertiary); padding: 3px 8px; border-radius: 2px;
   cursor: pointer; font-size: 13px; transition: all 0.2s;
   text-decoration: none; display: inline-flex; align-items: center;
 }
@@ -1630,13 +1798,13 @@ body::after {
 }
 .game-selector.visible { display: flex; gap: 6px; flex-wrap: wrap; }
 .game-tab {
-  padding: 4px 12px; border-radius: 4px; font-size: 12px;
+  padding: 4px 12px; border-radius: 2px; font-size: 12px;
   font-family: var(--font-mono); cursor: pointer;
   border: 1px solid var(--border-color); background: transparent;
   color: var(--text-tertiary); transition: all 0.2s;
 }
 .game-tab.active {
-  background: var(--bg-elevated); color: var(--text-primary);
+  background: var(--bg-elevated); color: #ffffff;
   border-color: var(--border-light);
 }
 
@@ -1644,17 +1812,17 @@ body::after {
 
 .metrics-grid {
   display: grid; grid-template-columns: repeat(4, 1fr);
-  gap: 14px; margin-bottom: 14px;
+  gap: 12px; margin-bottom: 12px;
 }
 .metric-card {
   position: relative;
-  background: linear-gradient(170deg, var(--bg-mid) 0%, var(--bg-surface) 100%);
+  background: var(--bg-mid);
   border: 1px solid var(--border-color); border-radius: var(--radius-md);
   padding: 18px 20px;
   transition: border-color 0.3s var(--ease-out), transform 0.2s var(--ease-out);
   overflow: hidden;
 }
-.metric-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+.metric-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
 .metric-card::after {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
   background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
@@ -1664,72 +1832,71 @@ body::after {
   letter-spacing: 0.08em; color: var(--text-tertiary); margin-bottom: 8px;
 }
 .metric-value {
-  font-family: var(--font-display); font-size: 32px; font-weight: 700;
+  font-family: var(--font-mono); font-size: 30px; font-weight: 700;
   color: var(--text-primary); line-height: 1.1; letter-spacing: -0.02em;
 }
-.metric-value.gold { color: var(--gold); }
-.metric-value.green { color: var(--green); }
+.metric-value.gold { color: var(--accent); }
+.metric-value.green { color: var(--green-bright); }
 .metric-sub {
   font-size: 12px; color: var(--text-tertiary); margin-top: 6px;
   font-family: var(--font-mono); font-weight: 400;
 }
 
-.charts-grid { display: grid; grid-template-columns: 1fr; gap: 14px; margin-bottom: 14px; }
-.charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.charts-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
+.charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .chart-card {
   position: relative;
-  background: linear-gradient(170deg, var(--bg-mid) 0%, var(--bg-surface) 100%);
+  background: var(--bg-mid);
   border: 1px solid var(--border-color); border-radius: var(--radius-md);
   padding: 20px 22px; overflow: hidden;
   transition: border-color 0.3s var(--ease-out), transform 0.2s var(--ease-out);
 }
-.chart-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+.chart-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
 .chart-card::after {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
   background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
 }
 .chart-card h3 {
-  font-family: var(--font-display); font-size: 18px; font-weight: 500;
-  color: var(--text-accent); margin-bottom: 16px; letter-spacing: -0.01em;
+  font-family: var(--font-body); font-size: 16px; font-weight: 600;
+  color: #ffffff; margin-bottom: 16px;
 }
 .chart-card canvas { width: 100% !important; }
 
 .section-header {
   display: flex; align-items: center; gap: 12px;
-  margin-bottom: 14px; margin-top: 8px;
+  margin-bottom: 12px; margin-top: 8px;
 }
 .section-header h2 {
-  font-family: var(--font-display); font-size: 22px; font-weight: 500;
-  color: var(--text-accent); letter-spacing: -0.01em;
+  font-family: var(--font-body); font-size: 18px; font-weight: 600;
+  color: #ffffff;
 }
 .section-header::after {
   content: ''; flex: 1; height: 1px;
   background: linear-gradient(90deg, var(--border-color), transparent);
 }
 
-.country-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 14px; }
+.country-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
 .country-card {
   position: relative;
-  background: linear-gradient(170deg, var(--bg-mid) 0%, var(--bg-surface) 100%);
+  background: var(--bg-mid);
   border: 1px solid var(--border-color); border-radius: var(--radius-md);
   padding: 20px 22px;
   transition: border-color 0.3s var(--ease-out), transform 0.2s var(--ease-out);
 }
-.country-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+.country-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
 .country-card::after {
   content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
   background: linear-gradient(90deg, transparent, var(--accent-glow), transparent);
 }
 .country-card > div { overflow-x: auto; }
 .country-card h3 {
-  font-family: var(--font-display); font-size: 18px; font-weight: 500;
-  color: var(--text-accent); margin-bottom: 14px;
+  font-family: var(--font-body); font-size: 16px; font-weight: 600;
+  color: #ffffff; margin-bottom: 14px;
 }
 .country-table { width: 100%; border-collapse: collapse; }
 .country-table tr {
-  border-bottom: 1px solid rgba(58,32,48,0.4); transition: background 0.2s;
+  border-bottom: 1px solid rgba(42,71,94,0.4); transition: background 0.2s;
 }
-:root[data-theme="light"] .country-table tr { border-bottom: 1px solid rgba(0,0,0,0.06); }
 .country-table tr:hover { background: var(--review-hover); }
 .country-table td { padding: 7px 0; font-size: 13px; }
 .country-table .cc { font-weight: 600; color: var(--text-secondary); width: 100px; }
@@ -1738,20 +1905,20 @@ body::after {
 
 .reviews-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
 .review-card {
-  background: linear-gradient(170deg, var(--bg-mid) 0%, var(--bg-surface) 100%);
+  background: var(--bg-mid);
   border: 1px solid var(--border-color); border-radius: var(--radius-md);
   padding: 18px 22px;
   transition: border-color 0.3s var(--ease-out), transform 0.2s var(--ease-out);
 }
-.review-card:hover { border-color: var(--border-light); transform: translateY(-2px); }
+.review-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
 .review-header { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
 .review-thumb {
   font-size: 18px; width: 28px; height: 28px;
   display: flex; align-items: center; justify-content: center;
-  border-radius: 6px; flex-shrink: 0;
+  border-radius: 4px; flex-shrink: 0;
 }
-.review-thumb.up { background: rgba(90,154,94,0.15); }
-.review-thumb.down { background: rgba(196,90,90,0.15); }
+.review-thumb.up { background: rgba(92,126,16,0.2); }
+.review-thumb.down { background: rgba(196,90,90,0.2); }
 .review-author { font-weight: 600; font-size: 13px; color: var(--text-secondary); }
 .review-playtime { margin-left: auto; font-size: 12px; font-family: var(--font-mono); color: var(--text-tertiary); }
 .review-text {
@@ -1774,7 +1941,7 @@ body::after {
   display: inline-block; width: 6px; height: 6px;
   border-radius: 50%; margin-right: 4px; vertical-align: middle;
 }
-.status-bar .dot.on { background: var(--green-bright); box-shadow: 0 0 4px rgba(108,192,112,0.4); }
+.status-bar .dot.on { background: var(--green-bright); box-shadow: 0 0 4px rgba(164,208,7,0.4); }
 .status-bar .dot.off { background: var(--red); }
 
 @keyframes shimmer {
@@ -1809,7 +1976,7 @@ body::after {
 @media (max-width: 768px) {
   .header { padding: 20px 20px; gap: 16px; }
   .header-img { width: 140px; }
-  .header-info h1 { font-size: 26px; }
+  .header-info h1 { font-size: 24px; }
   .dashboard { padding: 20px 16px 72px; }
   .chart-card canvas { min-height: 160px; }
   .country-table .cc { width: 70px; font-size: 12px; }
@@ -1823,13 +1990,13 @@ body::after {
   .dashboard { padding: 14px 10px 72px; }
   .metrics-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
   .metric-card { padding: 14px 16px; }
-  .metric-value { font-size: 26px; }
+  .metric-value { font-size: 24px; }
   .metric-label { font-size: 10px; }
   .metric-sub { font-size: 11px; }
   .chart-card { padding: 16px 14px; }
   .chart-card canvas { min-height: 150px; }
   .section-header { padding: 0 4px; }
-  .section-header h2 { font-size: 17px; }
+  .section-header h2 { font-size: 16px; }
   .review-card { padding: 14px 16px; }
   .status-bar { padding: 6px 12px; gap: 10px; font-size: 10px; }
   .status-bar span:nth-child(1) { display: none; }
@@ -1949,12 +2116,13 @@ body::after {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 (function() {
+  var browserLang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
   var rootEl = document.documentElement;
   rootEl.setAttribute('data-theme', '{{THEME}}');
   rootEl.setAttribute('data-accent', '{{ACCENT}}');
 
   var playerChart, salesChart, salesTimelineChart;
-  var curLang = localStorage.getItem('dashLang') || '{{LANGUAGE}}';
+  var curLang = localStorage.getItem('dashLang') || browserLang;
   var currentAppId = '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
 
@@ -2066,18 +2234,18 @@ body::after {
   function getChartColors() {
     var cs = getComputedStyle(rootEl);
     return {
-      gold: cs.getPropertyValue('--gold').trim() || '#c9a84c',
-      goldFill: cs.getPropertyValue('--gold-fill').trim() || 'rgba(201,168,76,0.08)',
-      green: cs.getPropertyValue('--green').trim() || '#5a9a5e',
-      greenFill: cs.getPropertyValue('--green-fill').trim() || 'rgba(90,154,94,0.06)',
+      gold: cs.getPropertyValue('--accent').trim() || '#66c0f4',
+      goldFill: cs.getPropertyValue('--accent-fill').trim() || 'rgba(102,192,244,0.08)',
+      green: cs.getPropertyValue('--green-bright').trim() || '#a4d007',
+      greenFill: cs.getPropertyValue('--green-fill').trim() || 'rgba(92,126,16,0.08)',
       red: cs.getPropertyValue('--red').trim() || '#c45a5a',
-      purple: cs.getPropertyValue('--purple').trim() || '#8b5a8a',
-      purpleFill: cs.getPropertyValue('--purple-fill').trim() || 'rgba(139,90,138,0.08)',
-      grid: cs.getPropertyValue('--chart-grid').trim() || 'rgba(58,32,48,0.3)',
-      tick: cs.getPropertyValue('--chart-tick').trim() || '#6a5a4e',
-      legend: cs.getPropertyValue('--chart-legend').trim() || '#9a8878',
-      tooltipBg: cs.getPropertyValue('--tooltip-bg').trim() || 'rgba(13,10,14,0.95)',
-      tooltipBorder: cs.getPropertyValue('--tooltip-border').trim() || 'rgba(201,168,76,0.2)'
+      purple: '#66c0f4',
+      purpleFill: 'rgba(102,192,244,0.08)',
+      grid: cs.getPropertyValue('--chart-grid').trim() || 'rgba(42,71,94,0.4)',
+      tick: cs.getPropertyValue('--chart-tick').trim() || '#556772',
+      legend: cs.getPropertyValue('--chart-legend').trim() || '#8f98a0',
+      tooltipBg: cs.getPropertyValue('--tooltip-bg').trim() || 'rgba(22,32,45,0.97)',
+      tooltipBorder: cs.getPropertyValue('--tooltip-border').trim() || 'rgba(102,192,244,0.2)'
     };
   }
 
@@ -2103,16 +2271,16 @@ body::after {
     };
     var baseTooltip = {
       backgroundColor: cc.tooltipBg, borderColor: cc.tooltipBorder, borderWidth: 1,
-      titleFont: { family: "'DM Sans'", weight: '600' },
+      titleFont: { family: "'Noto Sans', 'Noto Sans KR'", weight: '600' },
       bodyFont: { family: "'JetBrains Mono'", size: 12 },
-      padding: 12, cornerRadius: 8, displayColors: true, boxPadding: 4
+      padding: 12, cornerRadius: 4, displayColors: true, boxPadding: 4
     };
     var baseOpts = {
       responsive: true,
       animation: { duration: 500, easing: 'easeOutQuart' },
       interaction: { mode: 'index', intersect: false }
     };
-    var legendCfg = { display: true, labels: { color: cc.legend, usePointStyle: true, pointStyle: 'circle', padding: 16, font: { family: "'DM Sans'", size: 12 } } };
+    var legendCfg = { display: true, labels: { color: cc.legend, usePointStyle: true, pointStyle: 'circle', padding: 16, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 12 } } };
 
     salesTimelineChart = new Chart(document.getElementById('salesTimelineChart'), {
       type: 'line',
@@ -2124,8 +2292,8 @@ body::after {
         plugins: { legend: legendCfg, tooltip: baseTooltip },
         scales: {
           x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
-          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartSalesAxis'), color: cc.tick, font: { family: "'DM Sans'", size: 11 } } }),
-          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'DM Sans'", size: 11 } } })
+          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartSalesAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
+          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
         }
       })
     });
@@ -2133,16 +2301,16 @@ body::after {
     salesChart = new Chart(document.getElementById('salesChart'), {
       type: 'bar',
       data: { labels: [], datasets: [
-        { label: T('chartSales'), data: [], backgroundColor: cc.gold, borderRadius: 4, yAxisID: 'y', order: 2, barPercentage: 0.7 },
-        { label: T('chartRefunds'), data: [], backgroundColor: cc.red, borderRadius: 4, yAxisID: 'y', order: 3, barPercentage: 0.7 },
+        { label: T('chartSales'), data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
+        { label: T('chartRefunds'), data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
         { label: T('chartNetRev'), data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
       ]},
       options: Object.assign({}, baseOpts, {
         plugins: { legend: legendCfg, tooltip: baseTooltip },
         scales: {
           x: baseScaleX,
-          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'DM Sans'", size: 11 } } }),
-          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'DM Sans'", size: 11 } } })
+          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
+          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
         }
       })
     });
@@ -2205,7 +2373,7 @@ body::after {
         var diff = players - prev;
         var el = document.getElementById('playerChange');
         el.textContent = diff > 0 ? '\u25B2 +' + diff : diff < 0 ? '\u25BC ' + diff : T('noChange');
-        el.style.color = diff > 0 ? 'var(--green)' : diff < 0 ? 'var(--red)' : 'var(--text-tertiary)';
+        el.style.color = diff > 0 ? 'var(--green-bright)' : diff < 0 ? 'var(--red)' : 'var(--text-tertiary)';
       }
 
       playerChart.data.labels = hist.map(function(r) { var d = new Date(r[0]); return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0'); });
@@ -2231,7 +2399,7 @@ body::after {
         return '<table class="country-table">' + entries.map(function(entry) {
           var cc = esc(entry[0]); var d = entry[1]; var val = valFn(d);
           var pct = Math.round(val / maxVal * 100);
-          return '<tr><td class="cc">' + cc + '</td><td class="bar-cell"><div style="background:linear-gradient(90deg, var(--accent), var(--accent-dim));width:' + pct + '%;height:7px;border-radius:3px;min-width:6px;box-shadow:0 0 6px var(--accent-glow);"></div></td><td class="val">' + val + '</td></tr>';
+          return '<tr><td class="cc">' + cc + '</td><td class="bar-cell"><div style="background:linear-gradient(90deg, var(--accent), var(--accent-dim));width:' + pct + '%;height:7px;border-radius:2px;min-width:6px;box-shadow:0 0 6px var(--accent-glow);"></div></td><td class="val">' + val + '</td></tr>';
         }).join('') + '</table>';
       };
       document.getElementById('salesByCountry').innerHTML = renderCountryTable(data.sales_by_country || {}, function(d) { return d.units || 0; });
@@ -2320,22 +2488,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
         elif parsed.path == '/api/test':
             api_key = params.get('api_key', [''])[0]
-            app_id = params.get('app_id', [''])[0]
-            if not api_key or not app_id:
-                self._json_response({'success': False, 'error': 'Missing api_key or app_id'})
+            financial_key = params.get('financial_key', [''])[0]
+            app_ids_raw = params.get('app_ids', [''])[0]
+            app_ids = [a.strip() for a in app_ids_raw.split(',') if a.strip()] if app_ids_raw else []
+
+            if not api_key:
+                self._json_response({'success': False, 'error': 'Missing api_key'})
                 return
-            try:
-                data = fetch_json(
-                    f"https://store.steampowered.com/api/appdetails?appids={app_id}",
-                    "test"
-                )
-                if data and str(app_id) in data and data[str(app_id)].get("success"):
-                    name = data[str(app_id)]["data"].get("name", "")
-                    self._json_response({'success': True, 'name': name})
-                else:
-                    self._json_response({'success': False, 'error': 'App not found or API error'})
-            except Exception as e:
-                self._json_response({'success': False, 'error': str(e)})
+            if not app_ids:
+                self._json_response({'success': False, 'error': 'Missing app_ids'})
+                return
+
+            results = []
+            api_key_valid = False
+            financial_key_valid = False
+
+            # Test each game with the regular API key
+            for app_id in app_ids:
+                try:
+                    player_data = fetch_json(
+                        f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?key={api_key}&appid={app_id}",
+                        "test_api"
+                    )
+                    if player_data and "response" in player_data:
+                        api_key_valid = True
+                        # Get game name from store API (public, no key needed)
+                        details = fetch_json(
+                            f"https://store.steampowered.com/api/appdetails?appids={app_id}",
+                            "test_details"
+                        )
+                        name = ""
+                        if details and str(app_id) in details and details[str(app_id)].get("success"):
+                            name = details[str(app_id)]["data"].get("name", "")
+                        results.append({"app_id": app_id, "name": name, "success": True})
+                    else:
+                        results.append({"app_id": app_id, "name": "", "success": False, "error": "API key invalid or app not found"})
+                except Exception as e:
+                    results.append({"app_id": app_id, "name": "", "success": False, "error": str(e)})
+
+            # Test financial key if provided
+            if financial_key:
+                try:
+                    today_str = datetime.now().strftime("%Y-%m-%d")
+                    fin_data = fetch_json(
+                        f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetDetailedSales/v001/?key={financial_key}&date={today_str}&highwatermark_id=0",
+                        "test_financial"
+                    )
+                    if fin_data and "response" in fin_data:
+                        financial_key_valid = True
+                except Exception:
+                    pass
+
+            all_games_ok = all(r["success"] for r in results)
+            self._json_response({
+                'success': all_games_ok and api_key_valid,
+                'api_key_valid': api_key_valid,
+                'financial_key_valid': financial_key_valid,
+                'games': results
+            })
 
         elif parsed.path == '/api/data':
             if not has_settings():
@@ -2447,7 +2657,7 @@ def build_dashboard_html():
 
     html = DASHBOARD_HTML_TEMPLATE
     html = html.replace('{{THEME}}', dash.get('theme', 'dark'))
-    html = html.replace('{{ACCENT}}', dash.get('accent', 'wine'))
+    html = html.replace('{{ACCENT}}', dash.get('accent', 'steam'))
     html = html.replace('{{LANGUAGE}}', dash.get('language', 'en'))
     html = html.replace('{{POLL_INTERVAL}}', str(dash.get('poll_interval', 300)))
     html = html.replace('{{DEFAULT_APP_ID}}', default_app_id)
@@ -2484,7 +2694,7 @@ def main():
         print(f"  Dashboard:  http://localhost:{port}")
         print(f"  Polling:    {dash.get('poll_interval', 300) // 60}min")
         print(f"  Telegram:   {'ON (' + str(tg_count) + ' recipients)' if tg_on else 'OFF'}")
-        print(f"  Theme:      {dash.get('theme', 'dark')} / {dash.get('accent', 'wine')}")
+        print(f"  Theme:      {dash.get('theme', 'dark')} / {dash.get('accent', 'steam')}")
         print(f"  Language:   {dash.get('language', 'en')}")
         print("=" * 50)
     else:
