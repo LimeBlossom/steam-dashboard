@@ -386,6 +386,8 @@ def refresh_all_sales(financial_key, app_id, launch_date):
     today = datetime.now().date()
 
     # Find already-fetched dates to skip (gap-aware resume)
+    # Always re-fetch yesterday and today since sales accumulate intraday
+    refresh_cutoff = today - timedelta(days=1)
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
         "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
@@ -395,7 +397,7 @@ def refresh_all_sales(financial_key, app_id, launch_date):
     current = launch
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
-        if ds in existing:
+        if ds in existing and current < refresh_cutoff:
             current += timedelta(days=1)
             continue
         units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
