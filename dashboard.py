@@ -2350,10 +2350,19 @@ body {
       document.getElementById('revenueSub').textContent = T('beforeFees') + ' $' + (s.gross || 0).toFixed(0);
       document.getElementById('refundRate').textContent = (s.units > 0 ? ((s.returns / s.units) * 100).toFixed(1) : '0') + '%';
 
-      var timeline = data.sales_timeline || [];
-      salesTimelineChart.data.labels = timeline.map(function(r) { var d = new Date(r[0]); return (d.getMonth()+1) + '/' + d.getDate() + ' ' + (d.getHours() < 12 ? 'AM' : 'PM'); });
-      salesTimelineChart.data.datasets[0].data = timeline.map(function(r) { return r[1]; });
-      salesTimelineChart.data.datasets[1].data = timeline.map(function(r) { return r[3]; });
+      var dailyForCum = (data.daily_sales || []).filter(function(r) { return r[1] !== 0 || r[2] !== 0 || r[4] !== 0; });
+      var cumUnits = 0, cumNet = 0;
+      var cumLabels = [], cumUnitsData = [], cumNetData = [];
+      dailyForCum.forEach(function(r) {
+        cumUnits += r[1];
+        cumNet += r[4];
+        cumLabels.push(r[0].substring(5));
+        cumUnitsData.push(cumUnits);
+        cumNetData.push(Math.round(cumNet * 100) / 100);
+      });
+      salesTimelineChart.data.labels = cumLabels;
+      salesTimelineChart.data.datasets[0].data = cumUnitsData;
+      salesTimelineChart.data.datasets[1].data = cumNetData;
       salesTimelineChart.update('none');
 
       var dailyRaw = data.daily_sales || [];
