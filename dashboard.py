@@ -2383,7 +2383,7 @@ body {
       var rev = data.reviews || {};
       var total = rev.total_reviews || 0, pos = rev.total_positive || 0, neg = rev.total_negative || 0;
       document.getElementById('totalReviews').textContent = total;
-      document.getElementById('reviewRatio').innerHTML = '\uD83D\uDC4D ' + pos + ' / \uD83D\uDC4E ' + neg;
+      document.getElementById('reviewRatio').innerHTML = String.fromCodePoint(0x1F44D) + ' ' + pos + ' / ' + String.fromCodePoint(0x1F44E) + ' ' + neg;
       document.getElementById('positiveRate').textContent = total > 0 ? Math.round(pos/total*100) + '%' : '--';
       document.getElementById('reviewScore').textContent = rev.review_score_desc || '';
 
@@ -2408,7 +2408,7 @@ body {
       var recent = data.recent_reviews || [];
       document.getElementById('recentReviews').innerHTML = recent.map(function(r) {
         var isUp = r.voted_up;
-        var thumb = isUp ? '\uD83D\uDC4D' : '\uD83D\uDC4E';
+        var thumb = isUp ? String.fromCodePoint(0x1F44D) : String.fromCodePoint(0x1F44E);
         var thumbClass = isUp ? 'up' : 'down';
         var playtime = Math.round((r.author && r.author.playtime_forever || 0) / 60 * 10) / 10;
         var text = esc((r.review || '').substring(0, 300)).split(String.fromCharCode(10)).join(' ');
