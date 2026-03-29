@@ -407,20 +407,49 @@ def fetch_wishlist_for_date(financial_key, app_id, date_str):
     return {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0}
 
 
+_earliest_wishlist_cache = {}
+
+def find_earliest_wishlist_date(financial_key, app_id, launch_date):
+    """Find the earliest date with wishlist data using app_min_date from the API."""
+    if app_id in _earliest_wishlist_cache:
+        return _earliest_wishlist_cache[app_id]
+
+    # Query app_min_date using launch_date (reliably returns the field)
+    data = fetch_json(
+        f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/"
+        f"?key={financial_key}&appid={app_id}&date={launch_date}",
+        f"wishlist_min_date_{app_id}"
+    )
+    if data and "response" in data:
+        min_date = data["response"].get("app_min_date")
+        if min_date:
+            result = datetime.strptime(min_date, "%Y-%m-%d").date()
+            print(f"  [{app_id}] Wishlist data available from {result}")
+            _earliest_wishlist_cache[app_id] = result
+            return result
+
+    # Fallback: use launch_date
+    result = datetime.strptime(launch_date, "%Y-%m-%d").date()
+    _earliest_wishlist_cache[app_id] = result
+    return result
+
+
 def fetch_wishlist_totals(financial_key, app_id, launch_date):
     app_id = str(app_id)
-    launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
-
-    last = get_last_fetched_date('wishlist_totals_daily', app_id)
-    if last:
-        current = datetime.strptime(last, "%Y-%m-%d").date() + timedelta(days=1)
-    else:
-        current = launch
+    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
 
     conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT date FROM wishlist_totals_daily WHERE app_id=?", (app_id,)
+    ).fetchall())
+
+    current = earliest
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if ds in existing:
+            current += timedelta(days=1)
+            continue
         day = fetch_wishlist_for_date(financial_key, app_id, ds)
         conn.execute(
             "INSERT OR REPLACE INTO wishlist_totals_daily VALUES (?, ?, ?, ?, ?, ?)",
@@ -435,18 +464,20 @@ def fetch_wishlist_totals(financial_key, app_id, launch_date):
 
 def fetch_wishlist_by_country(financial_key, app_id, launch_date):
     app_id = str(app_id)
-    launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
-
-    last = get_last_fetched_date('wishlists_by_country_daily', app_id)
-    if last:
-        current = datetime.strptime(last, "%Y-%m-%d").date() + timedelta(days=1)
-    else:
-        current = launch
+    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
 
     conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=?", (app_id,)
+    ).fetchall())
+
+    current = earliest
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if ds in existing:
+            current += timedelta(days=1)
+            continue
         url = f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/?key={financial_key}&appid={app_id}&date={ds}"
         data = fetch_json(url, f"wishlist_country_{app_id}")
         if data and "response" in data:
