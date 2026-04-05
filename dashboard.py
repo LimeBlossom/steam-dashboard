@@ -55,6 +55,21 @@ def init_db():
         app_id TEXT, timestamp TEXT, total_adds INTEGER, total_deletes INTEGER,
         total_purchases INTEGER, net_wishlists INTEGER
     )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS sales_by_country_daily (
+        app_id TEXT, date TEXT, country_code TEXT,
+        units INTEGER, returns INTEGER, net_usd REAL,
+        PRIMARY KEY (app_id, date, country_code)
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS wishlists_by_country_daily (
+        app_id TEXT, date TEXT, country_code TEXT,
+        adds INTEGER, deletes INTEGER, purchases INTEGER,
+        PRIMARY KEY (app_id, date, country_code)
+    )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS wishlist_totals_daily (
+        app_id TEXT, date TEXT,
+        adds INTEGER, deletes INTEGER, purchases INTEGER, gifts INTEGER,
+        PRIMARY KEY (app_id, date)
+    )''')
     conn.commit()
     conn.close()
 
@@ -138,7 +153,7 @@ def get_player_history(app_id, limit=144):
 
 def get_all_daily_sales(app_id):
     conn = get_conn()
-    rows = conn.execute("SELECT date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd FROM daily_sales WHERE app_id=? AND (units_sold != 0 OR units_returned != 0 OR net_revenue_usd != 0) ORDER BY date", (str(app_id),)).fetchall()
+    rows = conn.execute("SELECT date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd FROM daily_sales WHERE app_id=? ORDER BY date", (str(app_id),)).fetchall()
     conn.close()
     return rows
 
@@ -189,6 +204,69 @@ def get_sales_totals(app_id):
     row = conn.execute("SELECT COALESCE(SUM(units_sold),0), COALESCE(SUM(units_returned),0), COALESCE(SUM(gross_revenue_usd),0), COALESCE(SUM(net_revenue_usd),0) FROM daily_sales WHERE app_id=?", (str(app_id),)).fetchone()
     conn.close()
     return row
+
+
+def get_all_games_sales_totals():
+    conn = get_conn()
+    row = conn.execute("SELECT COALESCE(SUM(units_sold),0), COALESCE(SUM(units_returned),0), COALESCE(SUM(gross_revenue_usd),0), COALESCE(SUM(net_revenue_usd),0) FROM daily_sales").fetchone()
+    conn.close()
+    return row
+
+
+def get_last_fetched_date(table, app_id):
+    conn = get_conn()
+    row = conn.execute(f"SELECT MAX(date) FROM {table} WHERE app_id=?", (str(app_id),)).fetchone()
+    conn.close()
+    return row[0] if row and row[0] else None
+
+
+def load_sales_by_country(app_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT country_code, SUM(units), SUM(returns), SUM(net_usd) "
+        "FROM sales_by_country_daily WHERE app_id=? GROUP BY country_code ORDER BY SUM(units) DESC",
+        (str(app_id),)
+    ).fetchall()
+    conn.close()
+    return {r[0]: {"units": r[1], "returns": r[2], "net": r[3]} for r in rows}
+
+
+def load_wishlists_by_country(app_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT country_code, SUM(adds), SUM(deletes), SUM(purchases) "
+        "FROM wishlists_by_country_daily WHERE app_id=? GROUP BY country_code ORDER BY SUM(adds) DESC",
+        (str(app_id),)
+    ).fetchall()
+    conn.close()
+    return {r[0]: {"adds": r[1], "deletes": r[2], "purchases": r[3]} for r in rows}
+
+
+def load_wishlist_totals(app_id):
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(adds),0), COALESCE(SUM(deletes),0), "
+        "COALESCE(SUM(purchases),0), COALESCE(SUM(gifts),0) "
+        "FROM wishlist_totals_daily WHERE app_id=?",
+        (str(app_id),)
+    ).fetchone()
+    conn.close()
+    if row:
+        total = {"adds": row[0], "deletes": row[1], "purchases": row[2], "gifts": row[3]}
+        total["net"] = total["adds"] - total["deletes"] - total["purchases"] - total["gifts"]
+        return total
+    return {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0, "net": 0}
+
+
+def get_daily_wishlists(app_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT date, adds, deletes, purchases FROM wishlist_totals_daily "
+        "WHERE app_id=? ORDER BY date",
+        (str(app_id),)
+    ).fetchall()
+    conn.close()
+    return rows
 
 
 # ========== HTTP FETCH WITH BACKOFF ==========
@@ -274,7 +352,7 @@ def fetch_sales_for_date(financial_key, app_id, date_str):
                f"?key={financial_key}&date={date_str}&highwatermark_id={hwm}")
         data = fetch_json(url, f"sales_{app_id}")
         if not data or "response" not in data:
-            break
+            return None
         resp = data["response"]
         for item in resp.get("results", []):
             if str(item.get("primary_appid", item.get("appid", ""))) == app_id:
@@ -290,41 +368,62 @@ def fetch_sales_for_date(financial_key, app_id, date_str):
     return units, returns, gross, net
 
 
-def fetch_sales_by_country(financial_key, app_id, launch_date):
+def fetch_sales_by_country(financial_key, app_id, launch_date, on_progress=None):
     app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
-    current = launch
-    countries = {}
 
+    last = get_last_fetched_date('sales_by_country_daily', app_id)
+    if last:
+        current = datetime.strptime(last, "%Y-%m-%d").date() + timedelta(days=1)
+    else:
+        current = launch
+
+    conn = get_conn()
+    skipped = 0
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if on_progress:
+            on_progress(ds)
+        day_countries = {}
         hwm = 0
+        fetch_ok = True
         while True:
             url = (f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetDetailedSales/v001/"
                    f"?key={financial_key}&date={ds}&highwatermark_id={hwm}")
             data = fetch_json(url, f"country_sales_{app_id}")
             if not data or "response" not in data:
+                fetch_ok = False
                 break
             resp = data["response"]
             for item in resp.get("results", []):
                 if str(item.get("primary_appid", item.get("appid", ""))) == app_id:
                     cc = item.get("country_code", "??")
-                    sold = item.get("gross_units_sold", 0)
-                    ret = item.get("gross_units_returned", 0)
-                    n = float(item.get("net_sales_usd", 0))
-                    if cc not in countries:
-                        countries[cc] = {"units": 0, "returns": 0, "net": 0.0}
-                    countries[cc]["units"] += sold
-                    countries[cc]["returns"] += ret
-                    countries[cc]["net"] += n
+                    if cc not in day_countries:
+                        day_countries[cc] = {"units": 0, "returns": 0, "net": 0.0}
+                    day_countries[cc]["units"] += item.get("gross_units_sold", 0)
+                    day_countries[cc]["returns"] += item.get("gross_units_returned", 0)
+                    day_countries[cc]["net"] += float(item.get("net_sales_usd", 0))
             max_id = resp.get("max_id", 0)
             if max_id == hwm or max_id == 0:
                 break
             hwm = max_id
+        if not fetch_ok:
+            skipped += 1
+            current += timedelta(days=1)
+            continue
+        for cc, d in day_countries.items():
+            conn.execute(
+                "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
+                (app_id, ds, cc, d["units"], d["returns"], d["net"])
+            )
+        conn.commit()
         current += timedelta(days=1)
+    conn.close()
+    if skipped:
+        print(f"  [{app_id}] WARNING: {skipped} country sales day(s) skipped due to API errors")
 
-    return dict(sorted(countries.items(), key=lambda x: x[1]["units"], reverse=True))
+    return load_sales_by_country(app_id)
 
 
 def fetch_wishlist_for_date(financial_key, app_id, date_str):
@@ -334,64 +433,150 @@ def fetch_wishlist_for_date(financial_key, app_id, date_str):
         s = data["response"].get("wishlist_summary", data["response"].get("summary", {}))
         return {"adds": s.get("wishlist_adds", 0), "deletes": s.get("wishlist_deletes", 0),
                 "purchases": s.get("wishlist_purchases", 0), "gifts": s.get("wishlist_gifts", 0)}
-    return {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0}
+    return None
 
 
-def fetch_wishlist_totals(financial_key, app_id, launch_date):
-    launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
+_earliest_wishlist_cache = {}
+
+def find_earliest_wishlist_date(financial_key, app_id, launch_date):
+    """Find the earliest date with wishlist data using app_min_date from the API."""
+    if app_id in _earliest_wishlist_cache:
+        return _earliest_wishlist_cache[app_id]
+
+    # Query app_min_date using launch_date (reliably returns the field)
+    data = fetch_json(
+        f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/"
+        f"?key={financial_key}&appid={app_id}&date={launch_date}",
+        f"wishlist_min_date_{app_id}"
+    )
+    if data and "response" in data:
+        min_date = data["response"].get("app_min_date")
+        if min_date:
+            result = datetime.strptime(min_date, "%Y-%m-%d").date()
+            print(f"  [{app_id}] Wishlist data available from {result}")
+            _earliest_wishlist_cache[app_id] = result
+            return result
+
+    # Fallback: use launch_date
+    result = datetime.strptime(launch_date, "%Y-%m-%d").date()
+    _earliest_wishlist_cache[app_id] = result
+    return result
+
+
+def fetch_wishlist_totals(financial_key, app_id, launch_date, on_progress=None):
+    app_id = str(app_id)
     today = datetime.now().date()
-    current = launch
-    total = {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0}
 
+    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
+
+    conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT date FROM wishlist_totals_daily WHERE app_id=?", (app_id,)
+    ).fetchall())
+
+    skipped = 0
+    current = earliest
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if ds in existing:
+            current += timedelta(days=1)
+            continue
+        if on_progress:
+            on_progress(ds)
         day = fetch_wishlist_for_date(financial_key, app_id, ds)
-        total["adds"] += day["adds"]
-        total["deletes"] += day["deletes"]
-        total["purchases"] += day["purchases"]
-        total["gifts"] += day["gifts"]
+        if day is None:
+            skipped += 1
+            current += timedelta(days=1)
+            continue
+        conn.execute(
+            "INSERT OR REPLACE INTO wishlist_totals_daily VALUES (?, ?, ?, ?, ?, ?)",
+            (app_id, ds, day["adds"], day["deletes"], day["purchases"], day.get("gifts", 0))
+        )
+        conn.commit()
         current += timedelta(days=1)
+    conn.close()
+    if skipped:
+        print(f"  [{app_id}] WARNING: {skipped} wishlist day(s) skipped due to API errors")
 
-    total["net"] = total["adds"] - total["deletes"] - total["purchases"] - total["gifts"]
-    return total
+    return load_wishlist_totals(app_id)
 
 
-def fetch_wishlist_by_country(financial_key, app_id, launch_date):
-    launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
+def fetch_wishlist_by_country(financial_key, app_id, launch_date, on_progress=None):
+    app_id = str(app_id)
     today = datetime.now().date()
-    current = launch
-    countries = {}
 
+    # Check if we already have pre-launch data; if so, skip the expensive search
+    conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=?", (app_id,)
+    ).fetchall())
+    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
+
+    skipped = 0
+    current = earliest
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
+        if ds in existing:
+            current += timedelta(days=1)
+            continue
+        if on_progress:
+            on_progress(ds)
         url = f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/?key={financial_key}&appid={app_id}&date={ds}"
         data = fetch_json(url, f"wishlist_country_{app_id}")
         if data and "response" in data:
             for c in data["response"].get("country_summary", []):
                 cc = c.get("country_code", "??")
                 s = c.get("summary_actions", {})
-                if cc not in countries:
-                    countries[cc] = {"adds": 0, "deletes": 0, "purchases": 0}
-                countries[cc]["adds"] += s.get("wishlist_adds", 0)
-                countries[cc]["deletes"] += s.get("wishlist_deletes", 0)
-                countries[cc]["purchases"] += s.get("wishlist_purchases", 0)
+                conn.execute(
+                    "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
+                    (app_id, ds, cc, s.get("wishlist_adds", 0),
+                     s.get("wishlist_deletes", 0), s.get("wishlist_purchases", 0))
+                )
+            conn.commit()
+        else:
+            skipped += 1
         current += timedelta(days=1)
+    conn.close()
+    if skipped:
+        print(f"  [{app_id}] WARNING: {skipped} wishlist country day(s) skipped due to API errors")
 
-    return dict(sorted(countries.items(), key=lambda x: x[1]["adds"], reverse=True))
+    return load_wishlists_by_country(app_id)
 
 
-def refresh_all_sales(financial_key, app_id, launch_date):
+def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
+    app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
-    current = launch
 
+    # Find first missing date (gap-aware resume)
+    conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
+    ).fetchall())
+    conn.close()
+
+    refresh_cutoff = today - timedelta(days=1)
+    skipped = 0
+    current = launch
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
-        units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
+        if ds in existing and current < refresh_cutoff:
+            current += timedelta(days=1)
+            continue
+        if on_progress:
+            on_progress(ds)
+        result = fetch_sales_for_date(financial_key, app_id, ds)
+        if result is None:
+            skipped += 1
+            current += timedelta(days=1)
+            continue
+        units, returns, gross, net = result
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
             print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
         current += timedelta(days=1)
+    if skipped:
+        print(f"  [{app_id}] WARNING: {skipped} day(s) skipped due to API errors")
 
 
 def refresh_recent_sales(financial_key, app_id):
@@ -399,7 +584,10 @@ def refresh_recent_sales(financial_key, app_id):
     yesterday = today - timedelta(days=1)
     for d in [yesterday, today]:
         ds = d.strftime("%Y-%m-%d")
-        units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
+        result = fetch_sales_for_date(financial_key, app_id, ds)
+        if result is None:
+            continue
+        units, returns, gross, net = result
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
             print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
@@ -475,9 +663,9 @@ class GameState:
         self.last_total_units = 0
         self.last_wishlist_net = 0
         self.peak_players = 0
-        self.cached_wishlist = {}
-        self.cached_sales_by_country = {}
-        self.cached_wishlist_by_country = {}
+        self.cached_wishlist = load_wishlist_totals(app_id)
+        self.cached_sales_by_country = load_sales_by_country(app_id)
+        self.cached_wishlist_by_country = load_wishlists_by_country(app_id)
 
 
 class DataCollector:
@@ -486,6 +674,7 @@ class DataCollector:
         self.collection_count = 0
         self.is_first_collection = True
         self._lock = threading.Lock()
+        self.status = ""
 
     def get_state(self, app_id):
         app_id = str(app_id)
@@ -531,16 +720,12 @@ class DataCollector:
                 gs.peak_players = players
 
             # Sales
-            if self.is_first_collection:
-                existing = get_sales_totals(app_id)
-                if existing[0] > 0:
-                    print(f"  [{game_name}] Existing data, refreshing recent only...")
-                    refresh_recent_sales(financial_key, app_id)
-                else:
-                    print(f"  [{game_name}] No data, full refresh...")
-                    refresh_all_sales(financial_key, app_id, launch_date)
-            else:
-                refresh_recent_sales(financial_key, app_id)
+            def _set_status(label):
+                def _inner(ds):
+                    self.status = f"{game_name}: {label} {ds}"
+                return _inner
+
+            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"))
 
             totals = get_sales_totals(app_id)
             total_units = totals[0]
@@ -550,14 +735,14 @@ class DataCollector:
             # Hourly cadence for expensive scans
             if self.collection_count % 12 == 0 or self.is_first_collection:
                 try:
-                    gs.cached_sales_by_country = fetch_sales_by_country(financial_key, app_id, launch_date)
-                    gs.cached_wishlist_by_country = fetch_wishlist_by_country(financial_key, app_id, launch_date)
+                    gs.cached_sales_by_country = fetch_sales_by_country(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales by country"))
+                    gs.cached_wishlist_by_country = fetch_wishlist_by_country(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists by country"))
                     print(f"  [{game_name}] Countries: {len(gs.cached_sales_by_country)} sales, {len(gs.cached_wishlist_by_country)} wishlist")
                 except Exception as e:
                     print(f"  [{game_name}] [COUNTRY ERROR] {e}")
 
                 try:
-                    gs.cached_wishlist = fetch_wishlist_totals(financial_key, app_id, launch_date)
+                    gs.cached_wishlist = fetch_wishlist_totals(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"))
                     wl_net = gs.cached_wishlist.get("net", 0)
                     save_wishlist_snapshot(app_id, gs.cached_wishlist["adds"],
                                            gs.cached_wishlist["deletes"],
@@ -632,6 +817,7 @@ class DataCollector:
             print(f"  [{game_name}] Players: {players} | Reviews: {total_reviews} | Sales: {total_units} | Peak: {gs.peak_players}")
 
         self.is_first_collection = False
+        self.status = ""
 
     def loop(self):
         while True:
@@ -1919,6 +2105,11 @@ body {
 }
 .review-thumb.up { background: rgba(92,126,16,0.2); }
 .review-thumb.down { background: rgba(196,90,90,0.2); }
+.review-game {
+  font-size: 11px; color: var(--accent); font-weight: 600;
+  background: var(--accent-fill); padding: 1px 6px; border-radius: 2px;
+  margin-right: 4px;
+}
 .review-author { font-weight: 600; font-size: 13px; color: var(--text-secondary); }
 .review-playtime { margin-left: auto; font-size: 12px; font-family: var(--font-mono); color: var(--text-tertiary); }
 .review-text {
@@ -2076,10 +2267,14 @@ body {
     </div>
   </div>
   <div class="section-header"><h2 data-i18n="salesPerf">Sales Performance</h2></div>
-  <div class="charts-grid">
+  <div id="cumChartsRow" class="charts-grid">
     <div class="chart-card">
-      <h3 data-i18n-html="cumSales">Cumulative Sales &amp; Revenue</h3>
+      <h3 id="cumSalesTitle" data-i18n-html="cumSales">Cumulative Sales &amp; Revenue</h3>
       <canvas id="salesTimelineChart" height="180"></canvas>
+    </div>
+    <div class="chart-card" id="cumRevenueCard" style="display:none;">
+      <h3>Cumulative Revenue</h3>
+      <canvas id="revenueTimelineChart" height="180"></canvas>
     </div>
   </div>
   <div class="charts-row">
@@ -2090,6 +2285,12 @@ body {
     <div class="chart-card">
       <h3 data-i18n="playerActivity">Player Activity</h3>
       <canvas id="playerChart" height="220"></canvas>
+    </div>
+  </div>
+  <div class="charts-grid">
+    <div class="chart-card">
+      <h3>Wishlist Activity</h3>
+      <canvas id="wishlistChart" height="180"></canvas>
     </div>
   </div>
   <div class="section-header"><h2 data-i18n="geoBreakdown">Geographic Breakdown</h2></div>
@@ -2110,6 +2311,7 @@ body {
 <div class="status-bar">
   <span>App ID: <span id="statusAppId">{{DEFAULT_APP_ID}}</span></span>
   <span>Poll: {{POLL_INTERVAL}}s</span>
+  <span id="collectorStatus" style="color:var(--accent);"></span>
   <span>Telegram: <span class="dot" id="tgDot"></span> <span id="tgStatus"></span></span>
 </div>
 
@@ -2121,15 +2323,25 @@ body {
   rootEl.setAttribute('data-theme', '{{THEME}}');
   rootEl.setAttribute('data-accent', '{{ACCENT}}');
 
-  var playerChart, salesChart, salesTimelineChart;
+  var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart;
   var curLang = localStorage.getItem('dashLang') || browserLang;
   var currentAppId = '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
+  var isPortfolioMode = false;
 
   // Show game selector if multiple games
   if (allGames.length > 1) {
     var sel = document.getElementById('gameSelector');
     sel.classList.add('visible');
+
+    // Add "All Games" tab first
+    var allBtn = document.createElement('button');
+    allBtn.className = 'game-tab';
+    allBtn.textContent = 'All Games';
+    allBtn.setAttribute('data-appid', '__all__');
+    allBtn.onclick = function() { switchGame('__all__'); };
+    sel.appendChild(allBtn);
+
     allGames.forEach(function(g) {
       var btn = document.createElement('button');
       btn.className = 'game-tab' + (g.app_id === currentAppId ? ' active' : '');
@@ -2142,11 +2354,13 @@ body {
 
   function switchGame(appId) {
     currentAppId = appId;
-    document.getElementById('statusAppId').textContent = appId;
+    isPortfolioMode = (appId === '__all__');
+    document.getElementById('statusAppId').textContent = isPortfolioMode ? 'All Games' : appId;
     document.querySelectorAll('.game-tab').forEach(function(btn) {
       btn.classList.toggle('active', btn.getAttribute('data-appid') === appId);
     });
     document.querySelectorAll('.metric-value').forEach(function(el) { el.classList.add('loading'); });
+    rebuildCharts();
     fetchData();
   }
 
@@ -2176,7 +2390,8 @@ body {
       chartSales: '\uD310\uB9E4 (\uAC74)', chartRefunds: '\uD658\uBD88',
       chartNetRev: '\uC21C\uC218\uC775 ($)', chartUnits: '\uAC74\uC218',
       chartRevenue: '\uC218\uC775 ($)', chartPlayers: '\uB3D9\uC811',
-      chartSalesAxis: '\uD310\uB9E4 (\uAC74)', chartRevenueAxis: '\uC218\uC775 ($)'
+      chartSalesAxis: '\uD310\uB9E4 (\uAC74)', chartRevenueAxis: '\uC218\uC775 ($)',
+      allGames: '\uC804\uCCB4 \uAC8C\uC784'
     },
     en: {
       totalSales: 'Total Sales', netRevenue: 'Net Revenue',
@@ -2202,11 +2417,12 @@ body {
       chartSales: 'Sales', chartRefunds: 'Refunds',
       chartNetRev: 'Net Revenue ($)', chartUnits: 'Units',
       chartRevenue: 'Revenue ($)', chartPlayers: 'Players',
-      chartSalesAxis: 'Sales', chartRevenueAxis: 'Revenue ($)'
+      chartSalesAxis: 'Sales', chartRevenueAxis: 'Revenue ($)',
+      allGames: 'All Games'
     }
   };
 
-  function T(key) { return (i18n[curLang] || i18n.en)[key] || key; }
+  function T(key) { var v = (i18n[curLang] || i18n.en)[key]; return v !== undefined ? v : key; }
 
   function applyStaticLabels() {
     document.querySelectorAll('[data-i18n]').forEach(function(el) {
@@ -2249,18 +2465,31 @@ body {
     };
   }
 
+  var gameColors = [
+    { border: '#66c0f4', fill: 'rgba(102,192,244,0.3)' },
+    { border: '#a4d007', fill: 'rgba(164,208,7,0.3)' },
+    { border: '#c45a5a', fill: 'rgba(196,90,90,0.3)' },
+    { border: '#c9a84c', fill: 'rgba(201,168,76,0.3)' },
+    { border: '#7a5aaa', fill: 'rgba(122,90,170,0.3)' },
+    { border: '#5ac4c4', fill: 'rgba(90,196,196,0.3)' },
+    { border: '#e07850', fill: 'rgba(224,120,80,0.3)' },
+    { border: '#50b050', fill: 'rgba(80,176,80,0.3)' }
+  ];
+
   function rebuildCharts() {
     if (salesTimelineChart) salesTimelineChart.destroy();
+    if (revenueTimelineChart) revenueTimelineChart.destroy();
     if (salesChart) salesChart.destroy();
     if (playerChart) playerChart.destroy();
+    if (wishlistChart) wishlistChart.destroy();
     initCharts();
   }
 
   function initCharts() {
     var cc = getChartColors();
     var isMobile = window.innerWidth <= 768;
-    var pr = isMobile ? 2 : 4;
-    var phr = isMobile ? 3 : 6;
+    var pr = 0;
+    var phr = isMobile ? 2 : 3;
     var baseScaleX = {
       ticks: { color: cc.tick, maxTicksLimit: 12, font: { family: "'JetBrains Mono'", size: 10 } },
       grid: { color: cc.grid, lineWidth: 0.5 }, border: { display: false }
@@ -2282,67 +2511,286 @@ body {
     };
     var legendCfg = { display: true, labels: { color: cc.legend, usePointStyle: true, pointStyle: 'circle', padding: 16, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 12 } } };
 
-    salesTimelineChart = new Chart(document.getElementById('salesTimelineChart'), {
-      type: 'line',
-      data: { labels: [], datasets: [
-        { label: T('chartCumSales'), data: [], borderColor: cc.gold, backgroundColor: cc.goldFill, fill: true, tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.gold, pointBorderColor: 'transparent', borderWidth: 2.5, yAxisID: 'y' },
-        { label: T('chartCumRev'), data: [], borderColor: cc.green, backgroundColor: 'transparent', borderDash: [6, 4], tension: 0.35, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', borderWidth: 2, yAxisID: 'y1' }
-      ]},
-      options: Object.assign({}, baseOpts, {
-        plugins: { legend: legendCfg, tooltip: baseTooltip },
-        scales: {
-          x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
-          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartSalesAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
-          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
-        }
-      })
-    });
+    if (isPortfolioMode) {
+      // Stacked cumulative sales
+      salesTimelineChart = new Chart(document.getElementById('salesTimelineChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
+            y: Object.assign({}, baseScaleY, { stacked: true })
+          }
+        })
+      });
 
-    salesChart = new Chart(document.getElementById('salesChart'), {
+      // Stacked cumulative revenue
+      revenueTimelineChart = new Chart(document.getElementById('revenueTimelineChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
+            y: Object.assign({}, baseScaleY, { stacked: true })
+          }
+        })
+      });
+
+      // Stacked daily sales (bars) + combined revenue (line)
+      salesChart = new Chart(document.getElementById('salesChart'), {
+        type: 'bar',
+        data: { labels: [], datasets: [] },
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: Object.assign({}, baseScaleX, { stacked: true }),
+            y: Object.assign({}, baseScaleY, { stacked: true, position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+          }
+        })
+      });
+
+      // Stacked player activity
+      playerChart = new Chart(document.getElementById('playerChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: baseScaleX,
+            y: Object.assign({}, baseScaleY, { stacked: true })
+          }
+        })
+      });
+    } else {
+      salesTimelineChart = new Chart(document.getElementById('salesTimelineChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [
+          { label: T('chartCumSales'), data: [], borderColor: cc.gold, backgroundColor: cc.goldFill, fill: true, tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.gold, pointBorderColor: 'transparent', borderWidth: 2.5, yAxisID: 'y' },
+          { label: T('chartCumRev'), data: [], borderColor: cc.green, backgroundColor: 'transparent', borderDash: [6, 4], tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.green, pointBorderColor: 'transparent', borderWidth: 2, yAxisID: 'y1' }
+        ]},
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
+            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartSalesAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+          }
+        })
+      });
+      revenueTimelineChart = null;
+
+      salesChart = new Chart(document.getElementById('salesChart'), {
+        type: 'bar',
+        data: { labels: [], datasets: [
+          { label: T('chartSales'), data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
+          { label: T('chartRefunds'), data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
+          { label: T('chartNetRev'), data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
+        ]},
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: baseScaleX,
+            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+          }
+        })
+      });
+
+      playerChart = new Chart(document.getElementById('playerChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [{
+          label: T('chartPlayers'), data: [],
+          borderColor: cc.purple, backgroundColor: cc.purpleFill,
+          fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
+          pointBackgroundColor: cc.purple, pointBorderColor: 'transparent', borderWidth: 2
+        }]},
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: { display: false }, tooltip: baseTooltip },
+          scales: { x: baseScaleX, y: baseScaleY }
+        })
+      });
+    }
+
+    // Wishlist chart (cumulative + daily adds)
+    wishlistChart = new Chart(document.getElementById('wishlistChart'), {
       type: 'bar',
       data: { labels: [], datasets: [
-        { label: T('chartSales'), data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
-        { label: T('chartRefunds'), data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
-        { label: T('chartNetRev'), data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
+        { label: 'Adds', data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
+        { label: 'Deletes', data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
+        { label: 'Cumulative', data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4, pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
       ]},
       options: Object.assign({}, baseOpts, {
         plugins: { legend: legendCfg, tooltip: baseTooltip },
         scales: {
           x: baseScaleX,
-          y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
-          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+          y: Object.assign({}, baseScaleY, { position: 'left' }),
+          y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false } })
         }
-      })
-    });
-
-    playerChart = new Chart(document.getElementById('playerChart'), {
-      type: 'line',
-      data: { labels: [], datasets: [{
-        label: T('chartPlayers'), data: [],
-        borderColor: cc.purple, backgroundColor: cc.purpleFill,
-        fill: true, tension: 0.35, pointRadius: isMobile ? 1 : 1.5, pointHoverRadius: isMobile ? 2 : 4,
-        pointBackgroundColor: cc.purple, pointBorderColor: 'transparent', borderWidth: 2
-      }]},
-      options: Object.assign({}, baseOpts, {
-        plugins: { legend: { display: false }, tooltip: baseTooltip },
-        scales: { x: baseScaleX, y: baseScaleY }
       })
     });
   }
 
+  function updatePortfolioCharts(data) {
+    var perGame = data.per_game || {};
+    var gameIds = Object.keys(perGame);
+    var isMobile = window.innerWidth <= 768;
+
+    // Collect all unique dates across all games
+    var allDates = {};
+    gameIds.forEach(function(id) {
+      (perGame[id].daily_sales || []).forEach(function(r) {
+        allDates[r[0]] = true;
+      });
+    });
+    var sortedDates = Object.keys(allDates).sort();
+    var labels = sortedDates;
+
+    // Cumulative sales & revenue (stacked area)
+    var cumSalesDatasets = [];
+    var cumRevDatasets = [];
+    gameIds.forEach(function(id, idx) {
+      var color = gameColors[idx % gameColors.length];
+      var dailyByDate = {};
+      (perGame[id].daily_sales || []).forEach(function(r) { dailyByDate[r[0]] = r; });
+
+      var cumUnits = 0, cumNet = 0;
+      var unitsArr = [], netArr = [];
+      sortedDates.forEach(function(date) {
+        var row = dailyByDate[date];
+        if (row) { cumUnits += row[1]; cumNet += row[4]; }
+        unitsArr.push(cumUnits);
+        netArr.push(Math.round(cumNet * 100) / 100);
+      });
+
+      cumSalesDatasets.push({
+        label: perGame[id].name,
+        data: unitsArr, borderColor: color.border, backgroundColor: color.fill,
+        fill: true, tension: 0.35, pointRadius: 0,
+        pointHoverRadius: isMobile ? 2 : 4, pointBackgroundColor: color.border,
+        pointBorderColor: 'transparent', borderWidth: 2
+      });
+      cumRevDatasets.push({
+        label: perGame[id].name,
+        data: netArr, borderColor: color.border, backgroundColor: color.fill,
+        fill: true, tension: 0.35, pointRadius: 0,
+        pointHoverRadius: isMobile ? 2 : 4, pointBackgroundColor: color.border,
+        pointBorderColor: 'transparent', borderWidth: 2
+      });
+    });
+
+    salesTimelineChart.data.labels = labels;
+    salesTimelineChart.data.datasets = cumSalesDatasets;
+    salesTimelineChart.update('none');
+
+    revenueTimelineChart.data.labels = labels;
+    revenueTimelineChart.data.datasets = cumRevDatasets;
+    revenueTimelineChart.update('none');
+
+    // Daily sales (stacked bar) + combined revenue (line)
+    var dailyBarDatasets = [];
+    var combinedRevArr = sortedDates.map(function() { return 0; });
+
+    gameIds.forEach(function(id, idx) {
+      var color = gameColors[idx % gameColors.length];
+      var dailyByDate = {};
+      (perGame[id].daily_sales || []).forEach(function(r) { dailyByDate[r[0]] = r; });
+
+      var unitsArr = [];
+      sortedDates.forEach(function(date, di) {
+        var row = dailyByDate[date];
+        unitsArr.push(row ? row[1] : 0);
+        if (row) combinedRevArr[di] += row[4];
+      });
+
+      dailyBarDatasets.push({
+        label: perGame[id].name,
+        data: unitsArr, backgroundColor: color.fill, borderColor: color.border,
+        borderWidth: 1, borderRadius: 2, yAxisID: 'y', stack: 'sales'
+      });
+    });
+
+    dailyBarDatasets.push({
+      label: T('chartNetRev'),
+      data: combinedRevArr.map(function(v) { return Math.round(v * 100) / 100; }),
+      type: 'line', borderColor: getChartColors().green, backgroundColor: 'transparent',
+      borderWidth: 2, pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
+      pointBackgroundColor: getChartColors().green, pointBorderColor: 'transparent',
+      tension: 0.35, yAxisID: 'y1', order: 0
+    });
+
+    salesChart.data.labels = labels;
+    salesChart.data.datasets = dailyBarDatasets;
+    salesChart.update('none');
+
+    // Player activity (stacked area)
+    var allTimestamps = {};
+    gameIds.forEach(function(id) {
+      (perGame[id].player_history || []).forEach(function(r) { allTimestamps[r[0]] = true; });
+    });
+    var sortedTimestamps = Object.keys(allTimestamps).sort();
+    var playerLabels = sortedTimestamps.map(function(ts) {
+      var d = new Date(ts);
+      return d.getHours().toString().padStart(2, '0') + ':' + d.getMinutes().toString().padStart(2, '0');
+    });
+
+    var playerDatasets = [];
+    gameIds.forEach(function(id, idx) {
+      var color = gameColors[idx % gameColors.length];
+      var histByTs = {};
+      (perGame[id].player_history || []).forEach(function(r) { histByTs[r[0]] = r[1]; });
+
+      var playerArr = sortedTimestamps.map(function(ts) { return histByTs[ts] || 0; });
+
+      playerDatasets.push({
+        label: perGame[id].name,
+        data: playerArr, borderColor: color.border, backgroundColor: color.fill,
+        fill: true, tension: 0.35, pointRadius: 0,
+        pointHoverRadius: isMobile ? 2 : 4, pointBackgroundColor: color.border,
+        pointBorderColor: 'transparent', borderWidth: 2
+      });
+    });
+
+    playerChart.data.labels = playerLabels;
+    playerChart.data.datasets = playerDatasets;
+    playerChart.update('none');
+  }
+
   function fetchData() {
-    var url = '/api/data?app_id=' + encodeURIComponent(currentAppId);
+    var url = isPortfolioMode
+      ? '/api/data-all'
+      : '/api/data?app_id=' + encodeURIComponent(currentAppId);
     fetch(url).then(function(resp) { return resp.json(); }).then(function(data) {
-      if (data.app_details) {
-        var d = data.app_details;
-        document.getElementById('gameName').textContent = d.name || '';
-        document.getElementById('gameDev').textContent = (d.developers || []).join(', ') + ' \u00B7 ' + (d.publishers || []).join(', ');
-        document.getElementById('headerImg').src = d.header_image || '';
-        if (d.price_overview) document.getElementById('gamePrice').textContent = d.price_overview.final_formatted || '';
+      // Header
+      if (isPortfolioMode) {
+        document.getElementById('gameName').textContent = T('allGames') || 'All Games';
+        document.getElementById('gameDev').textContent = allGames.length + ' games';
+        document.getElementById('headerImg').src = '';
+        document.getElementById('headerImg').style.display = 'none';
+        document.getElementById('gamePrice').textContent = '';
+        document.getElementById('gamePrice').style.display = 'none';
+        document.getElementById('cumRevenueCard').style.display = '';
+        document.getElementById('cumChartsRow').className = 'charts-row';
+        document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales';
+      } else {
+        document.getElementById('headerImg').style.display = '';
+        document.getElementById('gamePrice').style.display = '';
+        document.getElementById('cumRevenueCard').style.display = 'none';
+        document.getElementById('cumChartsRow').className = 'charts-grid';
+        document.getElementById('cumSalesTitle').innerHTML = T('cumSales') || 'Cumulative Sales &amp; Revenue';
+        if (data.app_details) {
+          var d = data.app_details;
+          document.getElementById('gameName').textContent = d.name || '';
+          document.getElementById('gameDev').textContent = (d.developers || []).join(', ') + ' \u00B7 ' + (d.publishers || []).join(', ');
+          document.getElementById('headerImg').src = d.header_image || '';
+          if (d.price_overview) document.getElementById('gamePrice').textContent = d.price_overview.final_formatted || '';
+        }
       }
       document.querySelectorAll('.metric-value.loading').forEach(function(el) { el.classList.remove('loading'); });
 
-      var s = data.sales_totals || {};
+      var s = isPortfolioMode ? (data.totals || {}) : (data.sales_totals || {});
       var suffix = T('unitSuffix');
       document.getElementById('totalSales').textContent = (s.units || 0).toLocaleString();
       document.getElementById('salesSub').textContent = T('refunds') + ' ' + (s.returns || 0) + suffix + ' \u00B7 ' + T('grossLabel') + ' $' + (s.gross || 0).toFixed(0);
@@ -2350,45 +2798,64 @@ body {
       document.getElementById('revenueSub').textContent = T('beforeFees') + ' $' + (s.gross || 0).toFixed(0);
       document.getElementById('refundRate').textContent = (s.units > 0 ? ((s.returns / s.units) * 100).toFixed(1) : '0') + '%';
 
-      var dailyForCum = (data.daily_sales || []).filter(function(r) { return r[1] !== 0 || r[2] !== 0 || r[4] !== 0; });
-      var cumUnits = 0, cumNet = 0;
-      var cumLabels = [], cumUnitsData = [], cumNetData = [];
-      dailyForCum.forEach(function(r) {
-        cumUnits += r[1];
-        cumNet += r[4];
-        cumLabels.push(r[0].substring(5));
-        cumUnitsData.push(cumUnits);
-        cumNetData.push(Math.round(cumNet * 100) / 100);
-      });
-      salesTimelineChart.data.labels = cumLabels;
-      salesTimelineChart.data.datasets[0].data = cumUnitsData;
-      salesTimelineChart.data.datasets[1].data = cumNetData;
-      salesTimelineChart.update('none');
-
-      var dailyRaw = data.daily_sales || [];
-      var daily = dailyRaw.filter(function(r) { return r[1] !== 0 || r[2] !== 0 || r[4] !== 0; });
-      salesChart.data.labels = daily.map(function(r) { return r[0].substring(5); });
-      salesChart.data.datasets[0].data = daily.map(function(r) { return r[1]; });
-      salesChart.data.datasets[1].data = daily.map(function(r) { return -r[2]; });
-      salesChart.data.datasets[2].data = daily.map(function(r) { return r[4]; });
-      salesChart.update('none');
-
       var players = data.current_players || 0;
       document.getElementById('currentPlayers').textContent = players.toLocaleString();
       document.getElementById('peakPlayers').textContent = (data.peak_players || 0).toLocaleString();
 
       var hist = data.player_history || [];
-      if (hist.length > 1) {
-        var prev = hist[hist.length - 2][1];
-        var diff = players - prev;
-        var el = document.getElementById('playerChange');
-        el.textContent = diff > 0 ? '\u25B2 +' + diff : diff < 0 ? '\u25BC ' + diff : T('noChange');
-        el.style.color = diff > 0 ? 'var(--green-bright)' : diff < 0 ? 'var(--red)' : 'var(--text-tertiary)';
+      if (!isPortfolioMode) {
+        if (hist.length > 1) {
+          var prev = hist[hist.length - 2][1];
+          var diff = players - prev;
+          var el = document.getElementById('playerChange');
+          el.textContent = diff > 0 ? '\u25B2 +' + diff : diff < 0 ? '\u25BC ' + diff : T('noChange');
+          el.style.color = diff > 0 ? 'var(--green-bright)' : diff < 0 ? 'var(--red)' : 'var(--text-tertiary)';
+        }
+      } else {
+        document.getElementById('playerChange').textContent = allGames.length + ' games';
+        document.getElementById('playerChange').style.color = 'var(--text-tertiary)';
       }
 
-      playerChart.data.labels = hist.map(function(r) { var d = new Date(r[0]); return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0'); });
-      playerChart.data.datasets[0].data = hist.map(function(r) { return r[1]; });
-      playerChart.update('none');
+      // Charts
+      if (isPortfolioMode) {
+        updatePortfolioCharts(data);
+      } else {
+        var dailyForCum = data.daily_sales || [];
+        var cumUnits = 0, cumNet = 0;
+        var cumLabels = [], cumUnitsData = [], cumNetData = [];
+        dailyForCum.forEach(function(r) {
+          cumUnits += r[1];
+          cumNet += r[4];
+          cumLabels.push(r[0]);
+          cumUnitsData.push(cumUnits);
+          cumNetData.push(Math.round(cumNet * 100) / 100);
+        });
+        salesTimelineChart.data.labels = cumLabels;
+        salesTimelineChart.data.datasets[0].data = cumUnitsData;
+        salesTimelineChart.data.datasets[1].data = cumNetData;
+        salesTimelineChart.update('none');
+
+        var dailyRaw = data.daily_sales || [];
+        var daily = dailyRaw;
+        salesChart.data.labels = daily.map(function(r) { return r[0]; });
+        salesChart.data.datasets[0].data = daily.map(function(r) { return r[1]; });
+        salesChart.data.datasets[1].data = daily.map(function(r) { return -r[2]; });
+        salesChart.data.datasets[2].data = daily.map(function(r) { return r[4]; });
+        salesChart.update('none');
+
+        playerChart.data.labels = hist.map(function(r) { var d = new Date(r[0]); return d.getHours().toString().padStart(2,'0') + ':' + d.getMinutes().toString().padStart(2,'0'); });
+        playerChart.data.datasets[0].data = hist.map(function(r) { return r[1]; });
+        playerChart.update('none');
+      }
+
+      // Wishlist chart (daily adds/deletes + cumulative line)
+      var dw = data.daily_wishlists || [];
+      var cumWl = 0;
+      wishlistChart.data.labels = dw.map(function(r) { return r[0]; });
+      wishlistChart.data.datasets[0].data = dw.map(function(r) { return r[1]; });
+      wishlistChart.data.datasets[1].data = dw.map(function(r) { return -r[2]; });
+      wishlistChart.data.datasets[2].data = dw.map(function(r) { cumWl += r[1] - r[2] - r[3]; return cumWl; });
+      wishlistChart.update('none');
 
       var rev = data.reviews || {};
       var total = rev.total_reviews || 0, pos = rev.total_positive || 0, neg = rev.total_negative || 0;
@@ -2421,14 +2888,22 @@ body {
         var thumb = isUp ? String.fromCodePoint(0x1F44D) : String.fromCodePoint(0x1F44E);
         var thumbClass = isUp ? 'up' : 'down';
         var playtime = Math.round((r.author && r.author.playtime_forever || 0) / 60 * 10) / 10;
+        var reviewDate = '';
+        if (r.timestamp_created) {
+          var rd = new Date(r.timestamp_created * 1000);
+          reviewDate = rd.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }) + ' \u2014 ';
+        }
         var text = esc((r.review || '').substring(0, 300)).split(String.fromCharCode(10)).join(' ');
-        return '<div class="review-card"><div class="review-header"><span class="review-thumb ' + thumbClass + '">' + thumb + '</span><span class="review-author">' + esc(r.author && r.author.personaname || 'Anonymous') + '</span><span class="review-playtime">' + playtime + T('hours') + '</span></div><div class="review-text">' + text + '</div></div>';
+        var gameTag = (isPortfolioMode && r.game_name) ? '<span class="review-game">' + esc(r.game_name) + '</span>' : '';
+        return '<div class="review-card"><div class="review-header"><span class="review-thumb ' + thumbClass + '">' + thumb + '</span>' + gameTag + '<span class="review-author">' + esc(r.author && r.author.personaname || 'Anonymous') + '</span><span class="review-playtime">' + reviewDate + playtime + T('hours') + '</span></div><div class="review-text">' + text + '</div></div>';
       }).join('');
 
       document.getElementById('tgDot').className = 'dot ' + (data.telegram_active ? 'on' : 'off');
       document.getElementById('tgStatus').textContent = data.telegram_active ? 'ON' : 'OFF';
+      document.getElementById('collectorStatus').textContent = data.collector_status || '';
       document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
       fetchFailCount = 0;
+      if (!hasInitialResize) { hasInitialResize = true; rebuildCharts(); fetchData(); }
     }).catch(function(e) { console.error('Fetch error:', e); fetchFailCount++; });
   }
 
@@ -2436,6 +2911,7 @@ body {
   updateToggleButtons();
   initCharts();
 
+  var hasInitialResize = false;
   var fetchFailCount = 0;
   function fetchWithBackoff() {
     fetchData();
@@ -2598,9 +3074,129 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 },
                 "wishlist": gs.cached_wishlist,
                 "wishlist_history": wl_history,
+                "daily_wishlists": get_daily_wishlists(req_app_id),
                 "sales_by_country": gs.cached_sales_by_country,
                 "wishlist_by_country": gs.cached_wishlist_by_country,
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
+                "collector_status": collector.status,
+                "timestamp": datetime.now().isoformat()
+            }
+            self._json_response(payload)
+
+        elif parsed.path == '/api/data-all':
+            if not has_settings():
+                self._json_response({'error': 'Not configured'}, 503)
+                return
+
+            settings = get_all_settings()
+            games = settings.get('games', [])
+            api_key = settings['steam_api_key']
+            collector = self.server.collector
+
+            # Aggregated sales totals
+            totals_row = get_all_games_sales_totals()
+            totals = {
+                "units": totals_row[0], "returns": totals_row[1],
+                "gross": totals_row[2], "net": totals_row[3]
+            }
+
+            # Aggregate reviews, wishlists, players, per-game chart data
+            agg_reviews = {"total_positive": 0, "total_negative": 0, "total_reviews": 0}
+            agg_wishlist = {"net": 0, "adds": 0, "deletes": 0, "purchases": 0}
+            total_players = 0
+            total_peak = 0
+            per_game = {}
+            all_recent_reviews = []
+            merged_sales_by_country = {}
+            merged_wl_by_country = {}
+
+            for game in games:
+                app_id = str(game['app_id'])
+                game_name = game.get('name', app_id)
+                gs = collector.get_state(app_id)
+
+                # Players
+                players = get_current_players(api_key, app_id)
+                total_players += players
+                total_peak += gs.peak_players
+
+                # Reviews
+                rev = get_reviews(app_id)
+                agg_reviews["total_positive"] += rev.get("total_positive", 0)
+                agg_reviews["total_negative"] += rev.get("total_negative", 0)
+                agg_reviews["total_reviews"] += rev.get("total_reviews", 0)
+
+                # Wishlists
+                wl = gs.cached_wishlist
+                agg_wishlist["net"] += wl.get("net", 0)
+                agg_wishlist["adds"] += wl.get("adds", 0)
+                agg_wishlist["deletes"] += wl.get("deletes", 0)
+                agg_wishlist["purchases"] += wl.get("purchases", 0)
+
+                # Per-game chart data
+                per_game[app_id] = {
+                    "name": game_name,
+                    "daily_sales": get_all_daily_sales(app_id),
+                    "player_history": get_player_history(app_id),
+                    "wishlist_history": get_wishlist_history(app_id),
+                    "daily_wishlists": get_daily_wishlists(app_id)
+                }
+
+                # Recent reviews with game name
+                recent = get_recent_reviews(app_id)
+                for r in recent:
+                    r["game_name"] = game_name
+                all_recent_reviews.extend(recent)
+
+                # Merge sales by country
+                for country, data in gs.cached_sales_by_country.items():
+                    if country not in merged_sales_by_country:
+                        merged_sales_by_country[country] = {}
+                    for k, v in data.items():
+                        merged_sales_by_country[country][k] = merged_sales_by_country[country].get(k, 0) + v
+
+                # Merge wishlists by country
+                for country, data in gs.cached_wishlist_by_country.items():
+                    if country not in merged_wl_by_country:
+                        merged_wl_by_country[country] = {}
+                    for k, v in data.items():
+                        merged_wl_by_country[country][k] = merged_wl_by_country[country].get(k, 0) + v
+
+            # Aggregate daily wishlists across all games
+            agg_daily_wl = {}
+            for gid, gdata in per_game.items():
+                for row in gdata.get("daily_wishlists", []):
+                    d = row[0]
+                    if d not in agg_daily_wl:
+                        agg_daily_wl[d] = [d, 0, 0, 0]
+                    agg_daily_wl[d][1] += row[1]
+                    agg_daily_wl[d][2] += row[2]
+                    agg_daily_wl[d][3] += row[3]
+            agg_daily_wishlists = [agg_daily_wl[d] for d in sorted(agg_daily_wl.keys())]
+
+            # Sort recent reviews by timestamp, limit to 20
+            all_recent_reviews.sort(key=lambda r: r.get("timestamp_created", 0), reverse=True)
+            all_recent_reviews = all_recent_reviews[:20]
+
+            # Sort country dicts by primary value descending
+            merged_sales_by_country = dict(sorted(merged_sales_by_country.items(), key=lambda x: x[1].get("units", 0), reverse=True))
+            merged_wl_by_country = dict(sorted(merged_wl_by_country.items(), key=lambda x: x[1].get("adds", 0), reverse=True))
+
+            tg = settings.get('telegram', {})
+
+            payload = {
+                "totals": totals,
+                "reviews": agg_reviews,
+                "wishlist": agg_wishlist,
+                "current_players": total_players,
+                "peak_players": total_peak,
+                "per_game": per_game,
+                "daily_wishlists": agg_daily_wishlists,
+                "sales_by_country": merged_sales_by_country,
+                "wishlist_by_country": merged_wl_by_country,
+                "recent_reviews": all_recent_reviews,
+                "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
+                "collector_status": collector.status,
                 "timestamp": datetime.now().isoformat()
             }
             self._json_response(payload)
