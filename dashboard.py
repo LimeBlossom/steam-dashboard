@@ -60,6 +60,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS wishlists_by_country_daily (
         app_id TEXT, date TEXT, country_code TEXT,
         adds INTEGER, deletes INTEGER, purchases INTEGER,
+        fetch_attempts INTEGER DEFAULT 0,
         PRIMARY KEY (app_id, date, country_code)
     )''')
     conn.commit()
@@ -474,7 +475,7 @@ def find_earliest_wishlist_date(financial_key, app_id, launch_date):
     return result
 
 
-def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, collector=None):
+def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, collector=None, game_state=None):
     app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
@@ -506,9 +507,10 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, coll
 
     skipped = 0
     throttled = False
+    writes = 0
 
     def _write_result(ds, result):
-        nonlocal skipped
+        nonlocal skipped, writes
         if result is None:
             skipped += 1
             return
@@ -525,6 +527,9 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, coll
             )
         c.commit()
         c.close()
+        writes += 1
+        if game_state and writes % 20 == 0:
+            game_state.cached_sales_by_country = load_sales_by_country(app_id)
         if totals[0] > 0 or totals[1] > 0:
             print(f"  [{app_id}] [{ds}] +{totals[0]} sold, -{totals[1]} returned, ${totals[3]:.2f} net")
 
@@ -570,14 +575,14 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, coll
         print(f"  [{app_id}] WARNING: {skipped} day(s) skipped due to API errors")
 
 
-def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None, collector=None):
+def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None, collector=None, game_state=None):
     app_id = str(app_id)
     today = datetime.now().date()
     earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
 
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
-        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=?", (app_id,)
+        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=? AND country_code='__all__' AND ((adds > 0 OR deletes > 0 OR purchases > 0) OR fetch_attempts >= 10)", (app_id,)
     ).fetchall())
     conn.close()
 
@@ -602,25 +607,36 @@ def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None, 
 
     skipped = 0
     throttled = False
+    writes = 0
 
     def _write_result(ds, result):
-        nonlocal skipped
+        nonlocal skipped, writes
         if result is None:
             skipped += 1
             return
         totals = result["totals"]
         c = get_conn()
+        # Get current attempt count for this date
+        row = c.execute(
+            "SELECT fetch_attempts FROM wishlists_by_country_daily WHERE app_id=? AND date=? AND country_code='__all__'",
+            (app_id, ds)
+        ).fetchone()
+        attempts = (row[0] if row else 0) + 1
         c.execute(
-            "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?)",
-            (app_id, ds, totals["adds"], totals["deletes"], totals["purchases"])
+            "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?, ?)",
+            (app_id, ds, totals["adds"], totals["deletes"], totals["purchases"], attempts)
         )
         for cc, d in result["by_country"].items():
             c.execute(
-                "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?, 0)",
                 (app_id, ds, cc, d["adds"], d["deletes"], d["purchases"])
             )
         c.commit()
         c.close()
+        writes += 1
+        if game_state and writes % 20 == 0:
+            game_state.cached_wishlist_by_country = load_wishlists_by_country(app_id)
+            game_state.cached_wishlist = load_wishlist_totals(app_id)
 
     if len(dates_to_fetch) > 5:
         # Parallel backfill
@@ -810,16 +826,16 @@ class DataCollector:
                     self.status = f"{game_name}: {label} {ds}"
                 return _inner
 
-            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"), collector=self)
+            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"), collector=self, game_state=gs)
 
             totals = get_sales_totals(app_id)
             total_units = totals[0]
             net_revenue = totals[3]
             save_sales_snapshot(app_id, totals[0], totals[1], totals[3])
-
-            refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"), collector=self)
-
             gs.cached_sales_by_country = load_sales_by_country(app_id)
+
+            refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"), collector=self, game_state=gs)
+
             gs.cached_wishlist_by_country = load_wishlists_by_country(app_id)
             gs.cached_wishlist = load_wishlist_totals(app_id)
             wl_net = gs.cached_wishlist.get("net", 0)
@@ -2183,9 +2199,9 @@ body {
   rootEl.setAttribute('data-theme', '{{THEME}}');
 
   var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart;
-  var currentAppId = '{{DEFAULT_APP_ID}}';
+  var currentAppId = localStorage.getItem('selectedGame') || '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
-  var isPortfolioMode = false;
+  var isPortfolioMode = (currentAppId === '__all__');
 
   // Show game selector if multiple games
   if (allGames.length > 1) {
@@ -2194,7 +2210,7 @@ body {
 
     // Add "All Games" tab first
     var allBtn = document.createElement('button');
-    allBtn.className = 'game-tab';
+    allBtn.className = 'game-tab' + (currentAppId === '__all__' ? ' active' : '');
     allBtn.textContent = 'All Games';
     allBtn.setAttribute('data-appid', '__all__');
     allBtn.onclick = function() { switchGame('__all__'); };
@@ -2212,6 +2228,7 @@ body {
 
   function switchGame(appId) {
     currentAppId = appId;
+    localStorage.setItem('selectedGame', appId);
     isPortfolioMode = (appId === '__all__');
     document.getElementById('statusAppId').textContent = isPortfolioMode ? 'All Games' : appId;
     document.querySelectorAll('.game-tab').forEach(function(btn) {
