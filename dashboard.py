@@ -45,8 +45,18 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS daily_sales (
         app_id TEXT, date TEXT, units_sold INTEGER, units_returned INTEGER,
         gross_revenue_usd REAL, net_revenue_usd REAL,
+        fetch_complete INTEGER DEFAULT 0,
         PRIMARY KEY (app_id, date)
     )''')
+    # Migration: add fetch_complete column to existing databases
+    try:
+        c.execute("ALTER TABLE daily_sales ADD COLUMN fetch_complete INTEGER DEFAULT 0")
+    except Exception:
+        pass  # Column already exists
+    # Mark existing non-zero rows as complete (legacy migration)
+    c.execute("UPDATE daily_sales SET fetch_complete = 1 WHERE fetch_complete = 0 AND (units_sold > 0 OR units_returned > 0 OR net_revenue_usd > 0)")
+    # Delete legacy zero rows from failed fetches
+    c.execute("DELETE FROM daily_sales WHERE fetch_complete = 0 AND units_sold = 0 AND units_returned = 0 AND net_revenue_usd = 0")
     c.execute('''CREATE TABLE IF NOT EXISTS sales_snapshots (
         app_id TEXT, timestamp TEXT, total_units INTEGER, total_returns INTEGER,
         total_net_usd REAL, PRIMARY KEY (app_id, timestamp)
@@ -120,10 +130,12 @@ def save_review_data(app_id, pos, neg, total):
 
 def upsert_daily_sales(app_id, date_str, units, returns, gross, net):
     conn = get_conn()
-    conn.execute("""INSERT INTO daily_sales VALUES (?, ?, ?, ?, ?, ?)
+    conn.execute("""INSERT INTO daily_sales (app_id, date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd, fetch_complete)
+        VALUES (?, ?, ?, ?, ?, ?, 1)
         ON CONFLICT(app_id, date) DO UPDATE SET
         units_sold=excluded.units_sold, units_returned=excluded.units_returned,
-        gross_revenue_usd=excluded.gross_revenue_usd, net_revenue_usd=excluded.net_revenue_usd
+        gross_revenue_usd=excluded.gross_revenue_usd, net_revenue_usd=excluded.net_revenue_usd,
+        fetch_complete=1
     """, (str(app_id), date_str, units, returns, gross, net))
     conn.commit()
     conn.close()
@@ -385,11 +397,10 @@ def refresh_all_sales(financial_key, app_id, launch_date):
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
 
-    # Find already-fetched dates to skip (gap-aware resume)
-    # Exclude zero-data rows — they may be from prior API failures
+    # Find successfully fetched dates to skip (gap-aware resume)
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
-        "SELECT date FROM daily_sales WHERE app_id=? AND (units_sold > 0 OR units_returned > 0 OR net_revenue_usd > 0)",
+        "SELECT date FROM daily_sales WHERE app_id=? AND fetch_complete = 1",
         (app_id,)
     ).fetchall())
     conn.close()
