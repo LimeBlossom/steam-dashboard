@@ -274,7 +274,7 @@ def fetch_sales_for_date(financial_key, app_id, date_str):
                f"?key={financial_key}&date={date_str}&highwatermark_id={hwm}")
         data = fetch_json(url, f"sales_{app_id}")
         if not data or "response" not in data:
-            break
+            return None
         resp = data["response"]
         for item in resp.get("results", []):
             if str(item.get("primary_appid", item.get("appid", ""))) == app_id:
@@ -405,7 +405,11 @@ def refresh_all_sales(financial_key, app_id, launch_date):
         if ds in existing and ds not in always_refresh:
             current += timedelta(days=1)
             continue
-        units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
+        result = fetch_sales_for_date(financial_key, app_id, ds)
+        if result is None:
+            current += timedelta(days=1)
+            continue
+        units, returns, gross, net = result
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
             print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
@@ -417,7 +421,10 @@ def refresh_recent_sales(financial_key, app_id):
     yesterday = today - timedelta(days=1)
     for d in [yesterday, today]:
         ds = d.strftime("%Y-%m-%d")
-        units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
+        result = fetch_sales_for_date(financial_key, app_id, ds)
+        if result is None:
+            continue
+        units, returns, gross, net = result
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
             print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
