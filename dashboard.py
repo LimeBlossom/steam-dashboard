@@ -386,18 +386,23 @@ def refresh_all_sales(financial_key, app_id, launch_date):
     today = datetime.now().date()
 
     # Find already-fetched dates to skip (gap-aware resume)
-    # Always re-fetch yesterday and today since sales accumulate intraday
-    refresh_cutoff = today - timedelta(days=1)
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
         "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
     ).fetchall())
     conn.close()
 
+    # Always re-fetch today, yesterday, and the last collected date
+    # (last collected date may be partial if the service was stopped mid-day)
+    last_collected = max(existing) if existing else None
+    always_refresh = {today.strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")}
+    if last_collected:
+        always_refresh.add(last_collected)
+
     current = launch
     while current <= today:
         ds = current.strftime("%Y-%m-%d")
-        if ds in existing and current < refresh_cutoff:
+        if ds in existing and ds not in always_refresh:
             current += timedelta(days=1)
             continue
         units, returns, gross, net = fetch_sales_for_date(financial_key, app_id, ds)
