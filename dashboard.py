@@ -386,9 +386,11 @@ def refresh_all_sales(financial_key, app_id, launch_date):
     today = datetime.now().date()
 
     # Find already-fetched dates to skip (gap-aware resume)
+    # Exclude zero-data rows — they may be from prior API failures
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
-        "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
+        "SELECT date FROM daily_sales WHERE app_id=? AND (units_sold > 0 OR units_returned > 0 OR net_revenue_usd > 0)",
+        (app_id,)
     ).fetchall())
     conn.close()
 
