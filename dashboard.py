@@ -16,6 +16,8 @@ import os
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
+from urllib.error import HTTPError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, quote
 from datetime import datetime, timedelta
 
@@ -257,6 +259,29 @@ def get_daily_wishlists(app_id):
     return rows
 
 
+class RateLimiter:
+    def __init__(self, max_per_second=20):
+        self._lock = threading.Lock()
+        self._min_interval = 1.0 / max_per_second
+        self._last_time = 0.0
+
+    def wait(self):
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_time
+            if elapsed < self._min_interval:
+                time.sleep(self._min_interval - elapsed)
+            self._last_time = time.monotonic()
+
+    def slow_down(self, new_max=10):
+        with self._lock:
+            self._min_interval = 1.0 / new_max
+            print(f"  [RATE LIMIT] Slowed to {new_max} req/s")
+
+
+_rate_limiter = RateLimiter(max_per_second=20)
+
+
 # ========== HTTP FETCH WITH BACKOFF ==========
 
 _api_fail_counts = {}
@@ -264,12 +289,23 @@ _api_fail_counts = {}
 
 def fetch_json(url, label="api"):
     global _api_fail_counts
+    _rate_limiter.wait()
     try:
         req = Request(url, headers={"User-Agent": "SteamDashboard/1.0"})
         with urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
         _api_fail_counts[label] = 0
         return data
+    except HTTPError as e:
+        if e.code == 429:
+            print(f"  [THROTTLED] {label}: HTTP 429 - rate limited by Steam")
+            return "throttled"
+        count = _api_fail_counts.get(label, 0) + 1
+        _api_fail_counts[label] = count
+        wait = min(2 ** count, 60)
+        print(f"  [ERROR] {label}: {e} (backoff {wait}s)")
+        time.sleep(wait)
+        return None
     except Exception as e:
         count = _api_fail_counts.get(label, 0) + 1
         _api_fail_counts[label] = count
@@ -438,7 +474,7 @@ def find_earliest_wishlist_date(financial_key, app_id, launch_date):
     return result
 
 
-def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
+def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, collector=None):
     app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
@@ -454,43 +490,87 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
     if last_collected:
         always_refresh.add(last_collected)
 
-    skipped = 0
+    # Build list of dates to fetch
+    dates_to_fetch = []
     current = today
     while current >= launch:
         ds = current.strftime("%Y-%m-%d")
         if ds in existing and ds not in always_refresh:
             current -= timedelta(days=1)
             continue
-        if on_progress:
-            on_progress(ds)
-        result = fetch_sales_for_date(financial_key, app_id, ds)
+        dates_to_fetch.append(ds)
+        current -= timedelta(days=1)
+
+    if not dates_to_fetch:
+        return
+
+    skipped = 0
+    throttled = False
+
+    def _write_result(ds, result):
+        nonlocal skipped
         if result is None:
             skipped += 1
-            current -= timedelta(days=1)
-            continue
+            return
         totals = result["totals"]
-        conn = get_conn()
-        # Write __all__ totals row
-        conn.execute(
+        c = get_conn()
+        c.execute(
             "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?, ?)",
             (app_id, ds, totals[0], totals[1], totals[2], totals[3])
         )
-        # Write per-country rows
         for cc, d in result["by_country"].items():
-            conn.execute(
+            c.execute(
                 "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (app_id, ds, cc, d["units"], d["returns"], d["gross"], d["net"])
             )
-        conn.commit()
-        conn.close()
+        c.commit()
+        c.close()
         if totals[0] > 0 or totals[1] > 0:
             print(f"  [{app_id}] [{ds}] +{totals[0]} sold, -{totals[1]} returned, ${totals[3]:.2f} net")
-        current -= timedelta(days=1)
+
+    if len(dates_to_fetch) > 5:
+        # Parallel backfill
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {}
+            for ds in dates_to_fetch:
+                future = executor.submit(fetch_sales_for_date, financial_key, app_id, ds)
+                futures[future] = ds
+
+            for future in as_completed(futures):
+                ds = futures[future]
+                if on_progress:
+                    on_progress(ds)
+                result = future.result()
+                if result == "throttled":
+                    throttled = True
+                    if collector:
+                        collector.throttled = True
+                    _rate_limiter.slow_down(10)
+                    time.sleep(30)
+                    skipped += 1
+                    continue
+                _write_result(ds, result)
+    else:
+        # Sequential for small batches
+        for ds in dates_to_fetch:
+            if on_progress:
+                on_progress(ds)
+            result = fetch_sales_for_date(financial_key, app_id, ds)
+            if result == "throttled":
+                throttled = True
+                if collector:
+                    collector.throttled = True
+                _rate_limiter.slow_down(10)
+                time.sleep(30)
+                skipped += 1
+                continue
+            _write_result(ds, result)
+
     if skipped:
         print(f"  [{app_id}] WARNING: {skipped} day(s) skipped due to API errors")
 
 
-def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None):
+def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None, collector=None):
     app_id = str(app_id)
     today = datetime.now().date()
     earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
@@ -506,36 +586,80 @@ def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None):
     if last_collected:
         always_refresh.add(last_collected)
 
-    skipped = 0
+    # Build list of dates to fetch
+    dates_to_fetch = []
     current = today
     while current >= earliest:
         ds = current.strftime("%Y-%m-%d")
         if ds in existing and ds not in always_refresh:
             current -= timedelta(days=1)
             continue
-        if on_progress:
-            on_progress(ds)
-        result = fetch_wishlist_for_date(financial_key, app_id, ds)
+        dates_to_fetch.append(ds)
+        current -= timedelta(days=1)
+
+    if not dates_to_fetch:
+        return
+
+    skipped = 0
+    throttled = False
+
+    def _write_result(ds, result):
+        nonlocal skipped
         if result is None:
             skipped += 1
-            current -= timedelta(days=1)
-            continue
+            return
         totals = result["totals"]
-        conn = get_conn()
-        # Write __all__ totals row
-        conn.execute(
+        c = get_conn()
+        c.execute(
             "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?)",
             (app_id, ds, totals["adds"], totals["deletes"], totals["purchases"])
         )
-        # Write per-country rows
         for cc, d in result["by_country"].items():
-            conn.execute(
+            c.execute(
                 "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
                 (app_id, ds, cc, d["adds"], d["deletes"], d["purchases"])
             )
-        conn.commit()
-        conn.close()
-        current -= timedelta(days=1)
+        c.commit()
+        c.close()
+
+    if len(dates_to_fetch) > 5:
+        # Parallel backfill
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {}
+            for ds in dates_to_fetch:
+                future = executor.submit(fetch_wishlist_for_date, financial_key, app_id, ds)
+                futures[future] = ds
+
+            for future in as_completed(futures):
+                ds = futures[future]
+                if on_progress:
+                    on_progress(ds)
+                result = future.result()
+                if result == "throttled":
+                    throttled = True
+                    if collector:
+                        collector.throttled = True
+                    _rate_limiter.slow_down(10)
+                    time.sleep(30)
+                    skipped += 1
+                    continue
+                _write_result(ds, result)
+    else:
+        # Sequential for small batches
+        for ds in dates_to_fetch:
+            if on_progress:
+                on_progress(ds)
+            result = fetch_wishlist_for_date(financial_key, app_id, ds)
+            if result == "throttled":
+                throttled = True
+                if collector:
+                    collector.throttled = True
+                _rate_limiter.slow_down(10)
+                time.sleep(30)
+                skipped += 1
+                continue
+            _write_result(ds, result)
+
     if skipped:
         print(f"  [{app_id}] WARNING: {skipped} wishlist day(s) skipped due to API errors")
 
@@ -626,6 +750,7 @@ class DataCollector:
         self.is_first_collection = True
         self._lock = threading.Lock()
         self.status = ""
+        self.throttled = False
 
     def get_state(self, app_id):
         app_id = str(app_id)
@@ -650,6 +775,7 @@ class DataCollector:
         print(f"[{now}] Collecting for {len(games)} game(s)...")
 
         self.collection_count += 1
+        self.throttled = False
 
         for game in games:
             app_id = str(game['app_id'])
@@ -684,14 +810,14 @@ class DataCollector:
                     self.status = f"{game_name}: {label} {ds}"
                 return _inner
 
-            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"))
+            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"), collector=self)
 
             totals = get_sales_totals(app_id)
             total_units = totals[0]
             net_revenue = totals[3]
             save_sales_snapshot(app_id, totals[0], totals[1], totals[3])
 
-            refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"))
+            refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"), collector=self)
 
             gs.cached_sales_by_country = load_sales_by_country(app_id)
             gs.cached_wishlist_by_country = load_wishlists_by_country(app_id)
@@ -1845,6 +1971,18 @@ body {
   mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
 }
 
+.warning-banner {
+  display: none;
+  background: rgba(232,167,53,0.15);
+  border-bottom: 1px solid rgba(232,167,53,0.3);
+  color: #e8a735;
+  font-size: 12px;
+  padding: 6px 16px;
+  text-align: center;
+  font-family: var(--font-mono);
+}
+.warning-banner.visible { display: block; }
+
 .status-bar {
   position: fixed; bottom: 0; left: 0; right: 0;
   background: var(--status-bg);
@@ -1943,6 +2081,7 @@ body {
   </div>
 </div>
 
+<div class="warning-banner" id="warningBanner"></div>
 <div class="dashboard">
   <div class="metrics-grid">
     <div class="metric-card">
@@ -2537,6 +2676,13 @@ body {
       document.getElementById('tgStatus').textContent = data.telegram_active ? 'ON' : 'OFF';
       document.getElementById('collectorStatus').textContent = data.collector_status || '';
       document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString();
+      var banner = document.getElementById('warningBanner');
+      if (data.warnings && data.warnings.length > 0) {
+        banner.textContent = data.warnings[0];
+        banner.classList.add('visible');
+      } else {
+        banner.classList.remove('visible');
+      }
       fetchFailCount = 0;
       if (!hasInitialResize) { hasInitialResize = true; rebuildCharts(); fetchData(); }
     }).catch(function(e) { console.error('Fetch error:', e); fetchFailCount++; });
@@ -2708,6 +2854,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "wishlist_by_country": gs.cached_wishlist_by_country,
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
                 "collector_status": collector.status,
+                "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
                 "timestamp": datetime.now().isoformat()
             }
             self._json_response(payload)
@@ -2824,6 +2971,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "recent_reviews": all_recent_reviews,
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
                 "collector_status": collector.status,
+                "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
                 "timestamp": datetime.now().isoformat()
             }
             self._json_response(payload)
