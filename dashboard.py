@@ -42,11 +42,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS review_history (
         app_id TEXT, timestamp TEXT, total_positive INTEGER, total_negative INTEGER, total_reviews INTEGER
     )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS daily_sales (
-        app_id TEXT, date TEXT, units_sold INTEGER, units_returned INTEGER,
-        gross_revenue_usd REAL, net_revenue_usd REAL,
-        PRIMARY KEY (app_id, date)
-    )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sales_snapshots (
         app_id TEXT, timestamp TEXT, total_units INTEGER, total_returns INTEGER,
         total_net_usd REAL, PRIMARY KEY (app_id, timestamp)
@@ -57,18 +52,13 @@ def init_db():
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS sales_by_country_daily (
         app_id TEXT, date TEXT, country_code TEXT,
-        units INTEGER, returns INTEGER, net_usd REAL,
+        units INTEGER, returns INTEGER, gross_usd REAL, net_usd REAL,
         PRIMARY KEY (app_id, date, country_code)
     )''')
     c.execute('''CREATE TABLE IF NOT EXISTS wishlists_by_country_daily (
         app_id TEXT, date TEXT, country_code TEXT,
         adds INTEGER, deletes INTEGER, purchases INTEGER,
         PRIMARY KEY (app_id, date, country_code)
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS wishlist_totals_daily (
-        app_id TEXT, date TEXT,
-        adds INTEGER, deletes INTEGER, purchases INTEGER, gifts INTEGER,
-        PRIMARY KEY (app_id, date)
     )''')
     conn.commit()
     conn.close()
@@ -133,17 +123,6 @@ def save_review_data(app_id, pos, neg, total):
     conn.close()
 
 
-def upsert_daily_sales(app_id, date_str, units, returns, gross, net):
-    conn = get_conn()
-    conn.execute("""INSERT INTO daily_sales VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT(app_id, date) DO UPDATE SET
-        units_sold=excluded.units_sold, units_returned=excluded.units_returned,
-        gross_revenue_usd=excluded.gross_revenue_usd, net_revenue_usd=excluded.net_revenue_usd
-    """, (str(app_id), date_str, units, returns, gross, net))
-    conn.commit()
-    conn.close()
-
-
 def get_player_history(app_id, limit=144):
     conn = get_conn()
     rows = conn.execute("SELECT timestamp, player_count FROM player_history WHERE app_id=? ORDER BY timestamp DESC LIMIT ?", (str(app_id), limit)).fetchall()
@@ -153,7 +132,11 @@ def get_player_history(app_id, limit=144):
 
 def get_all_daily_sales(app_id):
     conn = get_conn()
-    rows = conn.execute("SELECT date, units_sold, units_returned, gross_revenue_usd, net_revenue_usd FROM daily_sales WHERE app_id=? ORDER BY date", (str(app_id),)).fetchall()
+    rows = conn.execute(
+        "SELECT date, units, returns, gross_usd, net_usd FROM sales_by_country_daily "
+        "WHERE app_id=? AND country_code='__all__' ORDER BY date",
+        (str(app_id),)
+    ).fetchall()
     conn.close()
     return rows
 
@@ -201,30 +184,34 @@ def get_wishlist_history(app_id):
 
 def get_sales_totals(app_id):
     conn = get_conn()
-    row = conn.execute("SELECT COALESCE(SUM(units_sold),0), COALESCE(SUM(units_returned),0), COALESCE(SUM(gross_revenue_usd),0), COALESCE(SUM(net_revenue_usd),0) FROM daily_sales WHERE app_id=?", (str(app_id),)).fetchone()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(units),0), COALESCE(SUM(returns),0), "
+        "COALESCE(SUM(gross_usd),0), COALESCE(SUM(net_usd),0) "
+        "FROM sales_by_country_daily WHERE app_id=? AND country_code='__all__'",
+        (str(app_id),)
+    ).fetchone()
     conn.close()
     return row
 
 
 def get_all_games_sales_totals():
     conn = get_conn()
-    row = conn.execute("SELECT COALESCE(SUM(units_sold),0), COALESCE(SUM(units_returned),0), COALESCE(SUM(gross_revenue_usd),0), COALESCE(SUM(net_revenue_usd),0) FROM daily_sales").fetchone()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(units),0), COALESCE(SUM(returns),0), "
+        "COALESCE(SUM(gross_usd),0), COALESCE(SUM(net_usd),0) "
+        "FROM sales_by_country_daily WHERE country_code='__all__'"
+    ).fetchone()
     conn.close()
     return row
 
-
-def get_last_fetched_date(table, app_id):
-    conn = get_conn()
-    row = conn.execute(f"SELECT MAX(date) FROM {table} WHERE app_id=?", (str(app_id),)).fetchone()
-    conn.close()
-    return row[0] if row and row[0] else None
 
 
 def load_sales_by_country(app_id):
     conn = get_conn()
     rows = conn.execute(
         "SELECT country_code, SUM(units), SUM(returns), SUM(net_usd) "
-        "FROM sales_by_country_daily WHERE app_id=? GROUP BY country_code ORDER BY SUM(units) DESC",
+        "FROM sales_by_country_daily WHERE app_id=? AND country_code != '__all__' "
+        "GROUP BY country_code ORDER BY SUM(units) DESC",
         (str(app_id),)
     ).fetchall()
     conn.close()
@@ -235,7 +222,8 @@ def load_wishlists_by_country(app_id):
     conn = get_conn()
     rows = conn.execute(
         "SELECT country_code, SUM(adds), SUM(deletes), SUM(purchases) "
-        "FROM wishlists_by_country_daily WHERE app_id=? GROUP BY country_code ORDER BY SUM(adds) DESC",
+        "FROM wishlists_by_country_daily WHERE app_id=? AND country_code != '__all__' "
+        "GROUP BY country_code ORDER BY SUM(adds) DESC",
         (str(app_id),)
     ).fetchall()
     conn.close()
@@ -246,14 +234,14 @@ def load_wishlist_totals(app_id):
     conn = get_conn()
     row = conn.execute(
         "SELECT COALESCE(SUM(adds),0), COALESCE(SUM(deletes),0), "
-        "COALESCE(SUM(purchases),0), COALESCE(SUM(gifts),0) "
-        "FROM wishlist_totals_daily WHERE app_id=?",
+        "COALESCE(SUM(purchases),0) "
+        "FROM wishlists_by_country_daily WHERE app_id=? AND country_code='__all__'",
         (str(app_id),)
     ).fetchone()
     conn.close()
     if row:
-        total = {"adds": row[0], "deletes": row[1], "purchases": row[2], "gifts": row[3]}
-        total["net"] = total["adds"] - total["deletes"] - total["purchases"] - total["gifts"]
+        total = {"adds": row[0], "deletes": row[1], "purchases": row[2], "gifts": 0}
+        total["net"] = total["adds"] - total["deletes"] - total["purchases"]
         return total
     return {"adds": 0, "deletes": 0, "purchases": 0, "gifts": 0, "net": 0}
 
@@ -261,8 +249,8 @@ def load_wishlist_totals(app_id):
 def get_daily_wishlists(app_id):
     conn = get_conn()
     rows = conn.execute(
-        "SELECT date, adds, deletes, purchases FROM wishlist_totals_daily "
-        "WHERE app_id=? ORDER BY date",
+        "SELECT date, adds, deletes, purchases FROM wishlists_by_country_daily "
+        "WHERE app_id=? AND country_code='__all__' ORDER BY date",
         (str(app_id),)
     ).fetchall()
     conn.close()
@@ -310,11 +298,23 @@ def get_app_details(app_id):
     return None
 
 
-def get_game_name_from_api(app_id):
+def get_game_info_from_api(app_id):
+    """Fetch name and launch date from Steam store API."""
     details = get_app_details(app_id)
-    if details:
-        return details.get("name", f"App {app_id}")
-    return f"App {app_id}"
+    if not details:
+        return f"App {app_id}", None
+    name = details.get("name", f"App {app_id}")
+    launch_date = None
+    rd = details.get("release_date", {})
+    if not rd.get("coming_soon") and rd.get("date"):
+        try:
+            launch_date = datetime.strptime(rd["date"], "%b %d, %Y").strftime("%Y-%m-%d")
+        except ValueError:
+            try:
+                launch_date = datetime.strptime(rd["date"], "%d %b, %Y").strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+    return name, launch_date
 
 
 def get_reviews(app_id):
@@ -341,10 +341,11 @@ def get_recent_reviews(app_id):
 
 def fetch_sales_for_date(financial_key, app_id, date_str):
     app_id = str(app_id)
-    units = 0
-    returns = 0
-    gross = 0.0
-    net = 0.0
+    by_country = {}
+    total_units = 0
+    total_returns = 0
+    total_gross = 0.0
+    total_net = 0.0
     hwm = 0
 
     while True:
@@ -356,84 +357,58 @@ def fetch_sales_for_date(financial_key, app_id, date_str):
         resp = data["response"]
         for item in resp.get("results", []):
             if str(item.get("primary_appid", item.get("appid", ""))) == app_id:
-                units += item.get("gross_units_sold", 0)
-                returns += item.get("gross_units_returned", 0)
-                gross += float(item.get("gross_sales_usd", 0))
-                net += float(item.get("net_sales_usd", 0))
+                cc = item.get("country_code", "??")
+                units = item.get("gross_units_sold", 0)
+                returns = item.get("gross_units_returned", 0)
+                gross = float(item.get("gross_sales_usd", 0))
+                net = float(item.get("net_sales_usd", 0))
+                if cc not in by_country:
+                    by_country[cc] = {"units": 0, "returns": 0, "gross": 0.0, "net": 0.0}
+                by_country[cc]["units"] += units
+                by_country[cc]["returns"] += returns
+                by_country[cc]["gross"] += gross
+                by_country[cc]["net"] += net
+                total_units += units
+                total_returns += returns
+                total_gross += gross
+                total_net += net
         max_id = resp.get("max_id", 0)
         if max_id == hwm or max_id == 0:
             break
         hwm = max_id
 
-    return units, returns, gross, net
-
-
-def fetch_sales_by_country(financial_key, app_id, launch_date, on_progress=None):
-    app_id = str(app_id)
-    launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
-    today = datetime.now().date()
-
-    last = get_last_fetched_date('sales_by_country_daily', app_id)
-    if last:
-        current = datetime.strptime(last, "%Y-%m-%d").date() + timedelta(days=1)
-    else:
-        current = launch
-
-    conn = get_conn()
-    skipped = 0
-    while current <= today:
-        ds = current.strftime("%Y-%m-%d")
-        if on_progress:
-            on_progress(ds)
-        day_countries = {}
-        hwm = 0
-        fetch_ok = True
-        while True:
-            url = (f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetDetailedSales/v001/"
-                   f"?key={financial_key}&date={ds}&highwatermark_id={hwm}")
-            data = fetch_json(url, f"country_sales_{app_id}")
-            if not data or "response" not in data:
-                fetch_ok = False
-                break
-            resp = data["response"]
-            for item in resp.get("results", []):
-                if str(item.get("primary_appid", item.get("appid", ""))) == app_id:
-                    cc = item.get("country_code", "??")
-                    if cc not in day_countries:
-                        day_countries[cc] = {"units": 0, "returns": 0, "net": 0.0}
-                    day_countries[cc]["units"] += item.get("gross_units_sold", 0)
-                    day_countries[cc]["returns"] += item.get("gross_units_returned", 0)
-                    day_countries[cc]["net"] += float(item.get("net_sales_usd", 0))
-            max_id = resp.get("max_id", 0)
-            if max_id == hwm or max_id == 0:
-                break
-            hwm = max_id
-        if not fetch_ok:
-            skipped += 1
-            current += timedelta(days=1)
-            continue
-        for cc, d in day_countries.items():
-            conn.execute(
-                "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
-                (app_id, ds, cc, d["units"], d["returns"], d["net"])
-            )
-        conn.commit()
-        current += timedelta(days=1)
-    conn.close()
-    if skipped:
-        print(f"  [{app_id}] WARNING: {skipped} country sales day(s) skipped due to API errors")
-
-    return load_sales_by_country(app_id)
+    return {
+        "totals": (total_units, total_returns, total_gross, total_net),
+        "by_country": by_country
+    }
 
 
 def fetch_wishlist_for_date(financial_key, app_id, date_str):
     url = f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/?key={financial_key}&appid={app_id}&date={date_str}"
-    data = fetch_json(url, f"wishlist_day_{app_id}")
-    if data and "response" in data:
-        s = data["response"].get("wishlist_summary", data["response"].get("summary", {}))
-        return {"adds": s.get("wishlist_adds", 0), "deletes": s.get("wishlist_deletes", 0),
-                "purchases": s.get("wishlist_purchases", 0), "gifts": s.get("wishlist_gifts", 0)}
-    return None
+    data = fetch_json(url, f"wishlist_{app_id}")
+    if not data or "response" not in data:
+        return None
+    resp = data["response"]
+
+    s = resp.get("wishlist_summary", resp.get("summary", {}))
+    totals = {
+        "adds": s.get("wishlist_adds", 0),
+        "deletes": s.get("wishlist_deletes", 0),
+        "purchases": s.get("wishlist_purchases", 0),
+        "gifts": s.get("wishlist_gifts", 0)
+    }
+
+    by_country = {}
+    for c in resp.get("country_summary", []):
+        cc = c.get("country_code", "??")
+        sa = c.get("summary_actions", {})
+        by_country[cc] = {
+            "adds": sa.get("wishlist_adds", 0),
+            "deletes": sa.get("wishlist_deletes", 0),
+            "purchases": sa.get("wishlist_purchases", 0)
+        }
+
+    return {"totals": totals, "by_country": by_country}
 
 
 _earliest_wishlist_cache = {}
@@ -463,107 +438,23 @@ def find_earliest_wishlist_date(financial_key, app_id, launch_date):
     return result
 
 
-def fetch_wishlist_totals(financial_key, app_id, launch_date, on_progress=None):
-    app_id = str(app_id)
-    today = datetime.now().date()
-
-    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
-
-    conn = get_conn()
-    existing = set(r[0] for r in conn.execute(
-        "SELECT date FROM wishlist_totals_daily WHERE app_id=?", (app_id,)
-    ).fetchall())
-
-    skipped = 0
-    current = earliest
-    while current <= today:
-        ds = current.strftime("%Y-%m-%d")
-        if ds in existing:
-            current += timedelta(days=1)
-            continue
-        if on_progress:
-            on_progress(ds)
-        day = fetch_wishlist_for_date(financial_key, app_id, ds)
-        if day is None:
-            skipped += 1
-            current += timedelta(days=1)
-            continue
-        conn.execute(
-            "INSERT OR REPLACE INTO wishlist_totals_daily VALUES (?, ?, ?, ?, ?, ?)",
-            (app_id, ds, day["adds"], day["deletes"], day["purchases"], day.get("gifts", 0))
-        )
-        conn.commit()
-        current += timedelta(days=1)
-    conn.close()
-    if skipped:
-        print(f"  [{app_id}] WARNING: {skipped} wishlist day(s) skipped due to API errors")
-
-    return load_wishlist_totals(app_id)
-
-
-def fetch_wishlist_by_country(financial_key, app_id, launch_date, on_progress=None):
-    app_id = str(app_id)
-    today = datetime.now().date()
-
-    # Check if we already have pre-launch data; if so, skip the expensive search
-    conn = get_conn()
-    existing = set(r[0] for r in conn.execute(
-        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=?", (app_id,)
-    ).fetchall())
-    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
-
-    skipped = 0
-    current = earliest
-    while current <= today:
-        ds = current.strftime("%Y-%m-%d")
-        if ds in existing:
-            current += timedelta(days=1)
-            continue
-        if on_progress:
-            on_progress(ds)
-        url = f"{FINANCIAL_BASE}/IPartnerFinancialsService/GetAppWishlistReporting/v001/?key={financial_key}&appid={app_id}&date={ds}"
-        data = fetch_json(url, f"wishlist_country_{app_id}")
-        if data and "response" in data:
-            for c in data["response"].get("country_summary", []):
-                cc = c.get("country_code", "??")
-                s = c.get("summary_actions", {})
-                conn.execute(
-                    "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
-                    (app_id, ds, cc, s.get("wishlist_adds", 0),
-                     s.get("wishlist_deletes", 0), s.get("wishlist_purchases", 0))
-                )
-            conn.commit()
-        else:
-            skipped += 1
-        current += timedelta(days=1)
-    conn.close()
-    if skipped:
-        print(f"  [{app_id}] WARNING: {skipped} wishlist country day(s) skipped due to API errors")
-
-    return load_wishlists_by_country(app_id)
-
-
 def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
     app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
 
-    # Find missing dates (gap-aware resume)
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
-        "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
+        "SELECT DISTINCT date FROM sales_by_country_daily WHERE app_id=?", (app_id,)
     ).fetchall())
     conn.close()
 
-    # Always re-fetch today, yesterday, and the last collected date
-    # (last collected date may be partial if the service was stopped mid-day)
     last_collected = max(existing) if existing else None
     always_refresh = {today.strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")}
     if last_collected:
         always_refresh.add(last_collected)
 
     skipped = 0
-    # Walk backwards from today so recent gaps fill first
     current = today
     while current >= launch:
         ds = current.strftime("%Y-%m-%d")
@@ -577,27 +468,76 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
             skipped += 1
             current -= timedelta(days=1)
             continue
-        units, returns, gross, net = result
-        upsert_daily_sales(app_id, ds, units, returns, gross, net)
-        if units > 0 or returns > 0:
-            print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
+        totals = result["totals"]
+        conn = get_conn()
+        # Write __all__ totals row
+        conn.execute(
+            "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?, ?)",
+            (app_id, ds, totals[0], totals[1], totals[2], totals[3])
+        )
+        # Write per-country rows
+        for cc, d in result["by_country"].items():
+            conn.execute(
+                "INSERT OR REPLACE INTO sales_by_country_daily VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (app_id, ds, cc, d["units"], d["returns"], d["gross"], d["net"])
+            )
+        conn.commit()
+        conn.close()
+        if totals[0] > 0 or totals[1] > 0:
+            print(f"  [{app_id}] [{ds}] +{totals[0]} sold, -{totals[1]} returned, ${totals[3]:.2f} net")
         current -= timedelta(days=1)
     if skipped:
         print(f"  [{app_id}] WARNING: {skipped} day(s) skipped due to API errors")
 
 
-def refresh_recent_sales(financial_key, app_id):
+def refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=None):
+    app_id = str(app_id)
     today = datetime.now().date()
-    yesterday = today - timedelta(days=1)
-    for d in [yesterday, today]:
-        ds = d.strftime("%Y-%m-%d")
-        result = fetch_sales_for_date(financial_key, app_id, ds)
-        if result is None:
+    earliest = find_earliest_wishlist_date(financial_key, app_id, launch_date)
+
+    conn = get_conn()
+    existing = set(r[0] for r in conn.execute(
+        "SELECT DISTINCT date FROM wishlists_by_country_daily WHERE app_id=?", (app_id,)
+    ).fetchall())
+    conn.close()
+
+    last_collected = max(existing) if existing else None
+    always_refresh = {today.strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")}
+    if last_collected:
+        always_refresh.add(last_collected)
+
+    skipped = 0
+    current = today
+    while current >= earliest:
+        ds = current.strftime("%Y-%m-%d")
+        if ds in existing and ds not in always_refresh:
+            current -= timedelta(days=1)
             continue
-        units, returns, gross, net = result
-        upsert_daily_sales(app_id, ds, units, returns, gross, net)
-        if units > 0 or returns > 0:
-            print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
+        if on_progress:
+            on_progress(ds)
+        result = fetch_wishlist_for_date(financial_key, app_id, ds)
+        if result is None:
+            skipped += 1
+            current -= timedelta(days=1)
+            continue
+        totals = result["totals"]
+        conn = get_conn()
+        # Write __all__ totals row
+        conn.execute(
+            "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, '__all__', ?, ?, ?)",
+            (app_id, ds, totals["adds"], totals["deletes"], totals["purchases"])
+        )
+        # Write per-country rows
+        for cc, d in result["by_country"].items():
+            conn.execute(
+                "INSERT OR REPLACE INTO wishlists_by_country_daily VALUES (?, ?, ?, ?, ?, ?)",
+                (app_id, ds, cc, d["adds"], d["deletes"], d["purchases"])
+            )
+        conn.commit()
+        conn.close()
+        current -= timedelta(days=1)
+    if skipped:
+        print(f"  [{app_id}] WARNING: {skipped} wishlist day(s) skipped due to API errors")
 
 
 # ========== TELEGRAM ==========
@@ -670,6 +610,10 @@ class GameState:
         self.last_total_units = 0
         self.last_wishlist_net = 0
         self.peak_players = 0
+        self.cached_players = 0
+        self.cached_reviews = {}
+        self.cached_recent_reviews = []
+        self.cached_app_details = None
         self.cached_wishlist = load_wishlist_totals(app_id)
         self.cached_sales_by_country = load_sales_by_country(app_id)
         self.cached_wishlist_by_country = load_wishlists_by_country(app_id)
@@ -716,6 +660,7 @@ class DataCollector:
             # Players + Reviews
             players = get_current_players(api_key, app_id)
             reviews = get_reviews(app_id)
+            recent_reviews = get_recent_reviews(app_id)
             save_player_count(app_id, players)
 
             total_reviews = reviews.get("total_reviews", 0)
@@ -723,10 +668,17 @@ class DataCollector:
             total_negative = reviews.get("total_negative", 0)
             save_review_data(app_id, total_positive, total_negative, total_reviews)
 
+            # Cache for instant game switching
+            gs.cached_players = players
+            gs.cached_reviews = reviews
+            gs.cached_recent_reviews = recent_reviews
+            if gs.cached_app_details is None:
+                gs.cached_app_details = get_app_details(app_id)
+
             if players > gs.peak_players:
                 gs.peak_players = players
 
-            # Sales — walks backwards from today so recent data loads first
+            # Sales + Wishlists (unified fetch, no separate cadence needed)
             def _set_status(label):
                 def _inner(ds):
                     self.status = f"{game_name}: {label} {ds}"
@@ -739,26 +691,15 @@ class DataCollector:
             net_revenue = totals[3]
             save_sales_snapshot(app_id, totals[0], totals[1], totals[3])
 
-            # Hourly cadence for expensive scans
-            if self.collection_count % 12 == 0 or self.is_first_collection:
-                try:
-                    gs.cached_sales_by_country = fetch_sales_by_country(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales by country"))
-                    gs.cached_wishlist_by_country = fetch_wishlist_by_country(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists by country"))
-                    print(f"  [{game_name}] Countries: {len(gs.cached_sales_by_country)} sales, {len(gs.cached_wishlist_by_country)} wishlist")
-                except Exception as e:
-                    print(f"  [{game_name}] [COUNTRY ERROR] {e}")
+            refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"))
 
-                try:
-                    gs.cached_wishlist = fetch_wishlist_totals(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"))
-                    wl_net = gs.cached_wishlist.get("net", 0)
-                    save_wishlist_snapshot(app_id, gs.cached_wishlist["adds"],
-                                           gs.cached_wishlist["deletes"],
-                                           gs.cached_wishlist["purchases"], wl_net)
-                except Exception as e:
-                    wl_net = gs.last_wishlist_net
-                    print(f"  [{game_name}] [WISHLIST ERROR] {e}")
-            else:
-                wl_net = gs.last_wishlist_net
+            gs.cached_sales_by_country = load_sales_by_country(app_id)
+            gs.cached_wishlist_by_country = load_wishlists_by_country(app_id)
+            gs.cached_wishlist = load_wishlist_totals(app_id)
+            wl_net = gs.cached_wishlist.get("net", 0)
+            save_wishlist_snapshot(app_id, gs.cached_wishlist["adds"],
+                                   gs.cached_wishlist["deletes"],
+                                   gs.cached_wishlist["purchases"], wl_net)
 
             # Telegram alerts (skip on first collection)
             if self.is_first_collection:
@@ -1125,36 +1066,6 @@ input::placeholder {
   color: var(--steam-text-dim);
 }
 /* Accent picker */
-.accent-grid {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-.accent-swatch {
-  width: 40px;
-  height: 40px;
-  border-radius: 4px;
-  cursor: pointer;
-  border: 2px solid transparent;
-  transition: all 0.2s;
-  position: relative;
-}
-.accent-swatch.selected {
-  border-color: #ffffff;
-  box-shadow: 0 0 12px rgba(102,192,244,0.3);
-}
-.accent-swatch.selected::after {
-  content: '\\2713';
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-  font-weight: bold;
-  font-size: 16px;
-  text-shadow: 0 1px 3px rgba(0,0,0,0.5);
-}
 /* Test button — Steam green */
 .test-btn {
   background: linear-gradient(to right, #75b022, #588a1b);
@@ -1344,15 +1255,6 @@ input::placeholder {
       <h2>Preferences</h2>
       <div class="hint">Customize the look and feel of your dashboard.</div>
 
-      <label style="margin-top:20px;">Accent Color</label>
-      <div class="accent-grid">
-        <div class="accent-swatch selected" data-accent="steam" onclick="selectAccent('steam')" style="background: linear-gradient(135deg, #66c0f4, #2a475e);" title="Steam Blue"></div>
-        <div class="accent-swatch" data-accent="emerald" onclick="selectAccent('emerald')" style="background: linear-gradient(135deg, #5c7e10, #3d5a0a);" title="Emerald"></div>
-        <div class="accent-swatch" data-accent="amber" onclick="selectAccent('amber')" style="background: linear-gradient(135deg, #c9a84c, #8a7434);" title="Amber"></div>
-        <div class="accent-swatch" data-accent="coral" onclick="selectAccent('coral')" style="background: linear-gradient(135deg, #c45a5a, #8a3434);" title="Coral"></div>
-        <div class="accent-swatch" data-accent="violet" onclick="selectAccent('violet')" style="background: linear-gradient(135deg, #7a5aaa, #4a3a6a);" title="Violet"></div>
-      </div>
-
       <label style="margin-top:20px;">Port</label>
       <input type="number" id="portInput" value="{{PORT}}" min="1024" max="65535" />
     </div>
@@ -1380,7 +1282,7 @@ input::placeholder {
 (function() {
   var currentStep = 0;
   var totalSteps = 5;
-  var selectedAccent = 'steam';
+  var selectedAccent = 'steam'; // kept for settings payload compatibility
   var tgEnabled = false;
   var connectionTested = false;
 
@@ -1399,14 +1301,13 @@ input::placeholder {
       document.getElementById('tgChatIds').value = (tg.chat_ids || []).join(', ');
     }
     var dash = existingSettings.dashboard || {};
-    selectedAccent = dash.accent || 'steam';
     if (dash.port) document.getElementById('portInput').value = dash.port;
   }
 
   // Initialize games list
   var games = (existingSettings && existingSettings.games && existingSettings.games.length > 0)
     ? existingSettings.games
-    : [{ app_id: '', name: '', launch_date: '' }];
+    : [{ app_id: '', name: '' }];
 
   function renderGames() {
     var container = document.getElementById('gamesList');
@@ -1416,7 +1317,6 @@ input::placeholder {
       div.className = 'game-item';
       div.innerHTML =
         '<div class="field"><label>App ID</label><input type="text" value="' + (g.app_id || '') + '" onchange="updateGame(' + i + ',\\'app_id\\',this.value)" placeholder="4451370" /></div>' +
-        '<div class="field"><label>Launch Date</label><input type="date" value="' + (g.launch_date || '') + '" onchange="updateGame(' + i + ',\\'launch_date\\',this.value)" /><div class="field-hint">Launch date or EA start date. Sales data is collected from this date.</div></div>' +
         '<div class="game-status" id="gameStatus' + i + '"></div>' +
         (games.length > 1 ? '<button class="remove-btn" onclick="removeGame(' + i + ')">X</button>' : '');
       container.appendChild(div);
@@ -1424,7 +1324,7 @@ input::placeholder {
   }
 
   window.addGameRow = function() {
-    games.push({ app_id: '', name: '', launch_date: '' });
+    games.push({ app_id: '', name: '' });
     connectionTested = false;
     renderGames();
   };
@@ -1454,16 +1354,6 @@ input::placeholder {
       fields.classList.remove('visible');
     }
   };
-
-  window.selectAccent = function(accent) {
-    selectedAccent = accent;
-    document.querySelectorAll('.accent-swatch').forEach(function(el) {
-      el.classList.toggle('selected', el.getAttribute('data-accent') === accent);
-    });
-  };
-
-  // Apply saved accent after function is defined
-  selectAccent(selectedAccent);
 
   window.testConnection = function() {
     var apiKey = document.getElementById('steamApiKey').value.trim();
@@ -1596,7 +1486,6 @@ input::placeholder {
       var lines = [];
       lines.push('Games: ' + games.filter(function(g){return g.app_id;}).map(function(g){return g.app_id + (g.name ? ' (' + g.name + ')' : '');}).join(', '));
       lines.push('Telegram: ' + (tgEnabled ? 'ON' : 'OFF'));
-      lines.push('Accent: ' + selectedAccent);
       lines.push('Port: ' + document.getElementById('portInput').value);
       document.getElementById('setupSummary').innerHTML = lines.join('<br>');
     }
@@ -1718,25 +1607,9 @@ DASHBOARD_HTML_TEMPLATE = '''<!DOCTYPE html>
 }
 
 /* ---- ACCENT COLORS ---- */
-:root[data-accent="steam"] {
+:root {
   --accent: #66c0f4; --accent-dim: #2a475e;
   --accent-glow: rgba(102,192,244,0.2); --accent-fill: rgba(102,192,244,0.08);
-}
-:root[data-accent="emerald"] {
-  --accent: #5c7e10; --accent-dim: #3d5a0a;
-  --accent-glow: rgba(92,126,16,0.2); --accent-fill: rgba(92,126,16,0.08);
-}
-:root[data-accent="amber"] {
-  --accent: #c9a84c; --accent-dim: #8a7434;
-  --accent-glow: rgba(201,168,76,0.2); --accent-fill: rgba(201,168,76,0.08);
-}
-:root[data-accent="coral"] {
-  --accent: #c45a5a; --accent-dim: #8a3434;
-  --accent-glow: rgba(196,90,90,0.2); --accent-fill: rgba(196,90,90,0.08);
-}
-:root[data-accent="violet"] {
-  --accent: #7a5aaa; --accent-dim: #4a3a6a;
-  --accent-glow: rgba(122,90,170,0.2); --accent-fill: rgba(122,90,170,0.08);
 }
 
 /* ---- DARK THEME (Steam native) ---- */
@@ -2169,7 +2042,6 @@ body {
 (function() {
   var rootEl = document.documentElement;
   rootEl.setAttribute('data-theme', '{{THEME}}');
-  rootEl.setAttribute('data-accent', '{{ACCENT}}');
 
   var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart;
   var currentAppId = '{{DEFAULT_APP_ID}}';
@@ -2216,9 +2088,9 @@ body {
     return {
       gold: cs.getPropertyValue('--accent').trim() || '#66c0f4',
       goldFill: cs.getPropertyValue('--accent-fill').trim() || 'rgba(102,192,244,0.08)',
-      green: cs.getPropertyValue('--green-bright').trim() || '#a4d007',
-      greenFill: cs.getPropertyValue('--green-fill').trim() || 'rgba(92,126,16,0.08)',
-      red: cs.getPropertyValue('--red').trim() || '#c45a5a',
+      green: '#e8a735',
+      greenFill: 'rgba(232,167,53,0.08)',
+      red: '#c45a5a',
       purple: '#66c0f4',
       purpleFill: 'rgba(102,192,244,0.08)',
       grid: cs.getPropertyValue('--chart-grid').trim() || 'rgba(42,71,94,0.4)',
@@ -2808,10 +2680,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
             collector = self.server.collector
             gs = collector.get_state(req_app_id)
 
-            players = get_current_players(settings['steam_api_key'], req_app_id)
-            reviews = get_reviews(req_app_id)
-            recent = get_recent_reviews(req_app_id)
-            app_details = get_app_details(req_app_id)
             p_history = get_player_history(req_app_id)
             daily = get_all_daily_sales(req_app_id)
             timeline = get_sales_snapshots(req_app_id)
@@ -2821,11 +2689,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             tg = settings.get('telegram', {})
 
             payload = {
-                "current_players": players,
+                "current_players": gs.cached_players,
                 "peak_players": gs.peak_players,
-                "reviews": reviews,
-                "recent_reviews": recent,
-                "app_details": app_details,
+                "reviews": gs.cached_reviews,
+                "recent_reviews": gs.cached_recent_reviews,
+                "app_details": gs.cached_app_details,
                 "player_history": p_history,
                 "daily_sales": daily,
                 "sales_timeline": timeline,
@@ -2851,7 +2719,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             settings = get_all_settings()
             games = settings.get('games', [])
-            api_key = settings['steam_api_key']
             collector = self.server.collector
 
             # Aggregated sales totals
@@ -2877,12 +2744,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 gs = collector.get_state(app_id)
 
                 # Players
-                players = get_current_players(api_key, app_id)
-                total_players += players
+                total_players += gs.cached_players
                 total_peak += gs.peak_players
 
                 # Reviews
-                rev = get_reviews(app_id)
+                rev = gs.cached_reviews
                 agg_reviews["total_positive"] += rev.get("total_positive", 0)
                 agg_reviews["total_negative"] += rev.get("total_negative", 0)
                 agg_reviews["total_reviews"] += rev.get("total_reviews", 0)
@@ -2904,7 +2770,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 }
 
                 # Recent reviews with game name
-                recent = get_recent_reviews(app_id)
+                recent = list(gs.cached_recent_reviews)
                 for r in recent:
                     r["game_name"] = game_name
                 all_recent_reviews.extend(recent)
@@ -2977,11 +2843,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({'success': False, 'error': 'Invalid JSON'}, 400)
                 return
 
-            # Auto-fetch game names for any game missing a name
+            # Auto-fetch game names and launch dates
             games = data.get('games', [])
             for g in games:
-                if g.get('app_id') and not g.get('name'):
-                    g['name'] = get_game_name_from_api(g['app_id'])
+                if g.get('app_id') and (not g.get('name') or not g.get('launch_date')):
+                    name, launch_date = get_game_info_from_api(g['app_id'])
+                    if not g.get('name'):
+                        g['name'] = name
+                    if not g.get('launch_date') and launch_date:
+                        g['launch_date'] = launch_date
 
             data['games'] = games
             save_all_settings(data)
@@ -3018,7 +2888,6 @@ def build_dashboard_html():
 
     html = DASHBOARD_HTML_TEMPLATE
     html = html.replace('{{THEME}}', dash.get('theme', 'dark'))
-    html = html.replace('{{ACCENT}}', dash.get('accent', 'steam'))
     html = html.replace('{{POLL_INTERVAL}}', str(dash.get('poll_interval', 300)))
     html = html.replace('{{DEFAULT_APP_ID}}', default_app_id)
     html = html.replace('{{GAMES_JSON}}', json.dumps(games, ensure_ascii=False))
@@ -3054,7 +2923,7 @@ def main():
         print(f"  Dashboard:  http://localhost:{port}")
         print(f"  Polling:    {dash.get('poll_interval', 300) // 60}min")
         print(f"  Telegram:   {'ON (' + str(tg_count) + ' recipients)' if tg_on else 'OFF'}")
-        print(f"  Theme:      {dash.get('theme', 'dark')} / {dash.get('accent', 'steam')}")
+        print(f"  Theme:      {dash.get('theme', 'dark')}")
         print("=" * 50)
     else:
         print("=" * 50)
