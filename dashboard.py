@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Steam Dashboard - Real-time sales monitoring for Steam games
-https://github.com/chihyunn/steam-dashboard
+https://github.com/LimeBlossom/steam-dashboard
 
 Zero external dependencies (stdlib only).
 Settings stored in SQLite. Web-based setup wizard on first run.
@@ -548,33 +548,40 @@ def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None):
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
 
-    # Find first missing date (gap-aware resume)
+    # Find missing dates (gap-aware resume)
     conn = get_conn()
     existing = set(r[0] for r in conn.execute(
         "SELECT date FROM daily_sales WHERE app_id=?", (app_id,)
     ).fetchall())
     conn.close()
 
-    refresh_cutoff = today - timedelta(days=1)
+    # Always re-fetch today, yesterday, and the last collected date
+    # (last collected date may be partial if the service was stopped mid-day)
+    last_collected = max(existing) if existing else None
+    always_refresh = {today.strftime("%Y-%m-%d"), (today - timedelta(days=1)).strftime("%Y-%m-%d")}
+    if last_collected:
+        always_refresh.add(last_collected)
+
     skipped = 0
-    current = launch
-    while current <= today:
+    # Walk backwards from today so recent gaps fill first
+    current = today
+    while current >= launch:
         ds = current.strftime("%Y-%m-%d")
-        if ds in existing and current < refresh_cutoff:
-            current += timedelta(days=1)
+        if ds in existing and ds not in always_refresh:
+            current -= timedelta(days=1)
             continue
         if on_progress:
             on_progress(ds)
         result = fetch_sales_for_date(financial_key, app_id, ds)
         if result is None:
             skipped += 1
-            current += timedelta(days=1)
+            current -= timedelta(days=1)
             continue
         units, returns, gross, net = result
         upsert_daily_sales(app_id, ds, units, returns, gross, net)
         if units > 0 or returns > 0:
             print(f"  [{app_id}] [{ds}] +{units} sold, -{returns} returned, ${net:.2f} net")
-        current += timedelta(days=1)
+        current -= timedelta(days=1)
     if skipped:
         print(f"  [{app_id}] WARNING: {skipped} day(s) skipped due to API errors")
 
@@ -719,7 +726,7 @@ class DataCollector:
             if players > gs.peak_players:
                 gs.peak_players = players
 
-            # Sales
+            # Sales — walks backwards from today so recent data loads first
             def _set_status(label):
                 def _inner(ds):
                     self.status = f"{game_name}: {label} {ds}"
@@ -843,7 +850,7 @@ SETUP_HTML_TEMPLATE = '''<!DOCTYPE html>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMxNzFhMjEiLz4KICA8cmVjdCB4PSIxMCIgeT0iMjIiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMiIgcng9IjMiIGZpbGw9IiMxYjI4MzgiIG9wYWNpdHk9IjAuNiIvPgogIDxyZWN0IHg9IjE0IiB5PSI0MCIgd2lkdGg9IjYiIGhlaWdodD0iMTIiIHJ4PSIxIiBmaWxsPSIjMmE0NzVlIi8+CiAgPHJlY3QgeD0iMjIiIHk9IjM0IiB3aWR0aD0iNiIgaGVpZ2h0PSIxOCIgcng9IjEiIGZpbGw9IiMzZDZjOGUiLz4KICA8cmVjdCB4PSIzMCIgeT0iMjgiIHdpZHRoPSI2IiBoZWlnaHQ9IjI0IiByeD0iMSIgZmlsbD0iIzY2YzBmNCIvPgogIDxyZWN0IHg9IjM4IiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iMjAiIHJ4PSIxIiBmaWxsPSIjNjZjMGY0Ii8+CiAgPHJlY3QgeD0iNDYiIHk9IjI0IiB3aWR0aD0iNiIgaGVpZ2h0PSIyOCIgcng9IjEiIGZpbGw9IiM2NmMwZjQiLz4KICA8cG9seWxpbmUgcG9pbnRzPSIxNywzOCAyNSwzMiAzMywyNiA0MSwzMCA0OSwyMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTRkMDA3IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTciIGN5PSIzOCIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iMzMiIGN5PSIyNiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iNDkiIGN5PSIyMiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+Cjwvc3ZnPg==">
 <title>Steam Dashboard - Setup</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
   --steam-dark: #171a21;
@@ -856,7 +863,7 @@ SETUP_HTML_TEMPLATE = '''<!DOCTYPE html>
   --steam-text: #c7d5e0;
   --steam-text-dim: #8f98a0;
   --steam-text-dark: #556772;
-  --font-body: 'Noto Sans KR', 'Noto Sans', -apple-system, sans-serif;
+  --font-body: 'Noto Sans', -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1148,29 +1155,6 @@ input::placeholder {
   font-size: 16px;
   text-shadow: 0 1px 3px rgba(0,0,0,0.5);
 }
-/* Language selector */
-.lang-grid {
-  display: flex;
-  gap: 12px;
-}
-.lang-option {
-  flex: 1;
-  padding: 14px;
-  border-radius: 4px;
-  border: 2px solid #2a475e;
-  cursor: pointer;
-  text-align: center;
-  font-size: 15px;
-  font-weight: 500;
-  transition: all 0.2s;
-  color: var(--steam-text-dim);
-  background: transparent;
-}
-.lang-option.selected {
-  border-color: var(--steam-blue-light);
-  color: #ffffff;
-  background: rgba(102,192,244,0.08);
-}
 /* Test button — Steam green */
 .test-btn {
   background: linear-gradient(to right, #75b022, #588a1b);
@@ -1275,23 +1259,23 @@ input::placeholder {
 <body>
 <div class="wizard">
   <div class="wizard-header">
-    <h1 data-i18n="setupTitle">Steam Dashboard Setup</h1>
-    <p data-i18n="setupDesc">Real-time sales monitoring for your Steam games. Let's get you set up in a few quick steps.</p>
+    <h1>Steam Dashboard Setup</h1>
+    <p>Real-time sales monitoring for your Steam games. Let's get you set up in a few quick steps.</p>
   </div>
 
   <div class="steps-bar">
-    <div class="step-dot active" data-step="0" data-i18n="stepWelcome">INTRO</div>
-    <div class="step-dot" data-step="1" data-i18n="stepConnection">CONNECT</div>
-    <div class="step-dot" data-step="2" data-i18n="stepTelegram">ALERTS</div>
-    <div class="step-dot" data-step="3" data-i18n="stepPrefs">PREFS</div>
-    <div class="step-dot" data-step="4" data-i18n="stepConfirm">GO</div>
+    <div class="step-dot active" data-step="0">INTRO</div>
+    <div class="step-dot" data-step="1">CONNECT</div>
+    <div class="step-dot" data-step="2">ALERTS</div>
+    <div class="step-dot" data-step="3">PREFS</div>
+    <div class="step-dot" data-step="4">GO</div>
   </div>
 
   <!-- Step 0: Welcome -->
   <div class="step-panel active" data-step="0">
     <div class="card">
-      <h2 data-i18n="welcomeTitle">Welcome</h2>
-      <div class="hint" data-i18n-html="welcomeHint">
+      <h2>Welcome</h2>
+      <div class="hint">
         This dashboard tracks your Steam game's sales, revenue, reviews,
         concurrent players, and wishlists in real-time. It can also send
         you Telegram alerts when something happens.
@@ -1307,31 +1291,31 @@ input::placeholder {
   <!-- Step 1: Steam Connection (API Keys + Games + Test) -->
   <div class="step-panel" data-step="1">
     <div class="card">
-      <h2 data-i18n="connectionTitle">Steam Connection</h2>
-      <div class="hint" data-i18n-html="connectionHint">
+      <h2>Steam Connection</h2>
+      <div class="hint">
         Enter your API keys and add games to monitor. Test the connection before proceeding.
       </div>
 
       <label>Steam Web API Key <span class="key-status pending" id="apiKeyStatus"></span></label>
       <input type="password" id="steamApiKey" placeholder="E719B9C8C920A1EB..." />
-      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;" data-i18n-html="apiKeyPath">
+      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;">
         <a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>
       </div>
 
       <label style="margin-top:18px;">Steam Financial API Key <span class="key-status pending" id="finKeyStatus"></span></label>
       <input type="password" id="steamFinancialKey" placeholder="064E0AB9C952..." />
-      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;" data-i18n-html="finKeyPath">
+      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;">
         Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [group] &rarr; Web API Key
       </div>
 
       <hr class="divider">
 
-      <h2 data-i18n="gamesTitle" style="margin-top:0;">Your Games</h2>
-      <div class="hint" data-i18n="gamesHint">Add one or more games to monitor. The game name will be fetched automatically.</div>
+      <h2 style="margin-top:0;">Your Games</h2>
+      <div class="hint">Add one or more games to monitor. The game name will be fetched automatically.</div>
       <div id="gamesList"></div>
-      <button class="add-game-btn" onclick="addGameRow()" data-i18n="addGame">+ Add Another Game</button>
+      <button class="add-game-btn" onclick="addGameRow()">+ Add Another Game</button>
 
-      <button class="test-btn" id="testBtn" onclick="testConnection()" data-i18n="testConnection">Test Connection</button>
+      <button class="test-btn" id="testBtn" onclick="testConnection()">Test Connection</button>
       <div class="test-result" id="testResult"></div>
     </div>
   </div>
@@ -1339,16 +1323,16 @@ input::placeholder {
   <!-- Step 2: Telegram -->
   <div class="step-panel" data-step="2">
     <div class="card">
-      <h2 data-i18n="telegramTitle">Telegram Alerts</h2>
-      <div class="hint" data-i18n="telegramHint">Get instant notifications for new sales, reviews, and player spikes. This is optional.</div>
+      <h2>Telegram Alerts</h2>
+      <div class="hint">Get instant notifications for new sales, reviews, and player spikes. This is optional.</div>
       <div class="toggle-row">
         <div class="toggle" id="tgToggle" onclick="toggleTelegram()"></div>
-        <span class="toggle-label" data-i18n="enableTelegram">Enable Telegram alerts</span>
+        <span class="toggle-label">Enable Telegram alerts</span>
       </div>
       <div class="tg-fields" id="tgFields">
-        <label data-i18n="botTokenLabel">Bot Token</label>
+        <label>Bot Token</label>
         <input type="password" id="tgBotToken" placeholder="123456:ABC-DEF..." />
-        <label data-i18n="chatIdsLabel">Chat IDs (comma-separated)</label>
+        <label>Chat IDs (comma-separated)</label>
         <input type="text" id="tgChatIds" placeholder="7271353545, 8264620489" />
       </div>
     </div>
@@ -1357,16 +1341,10 @@ input::placeholder {
   <!-- Step 3: Preferences -->
   <div class="step-panel" data-step="3">
     <div class="card">
-      <h2 data-i18n="prefsTitle">Preferences</h2>
-      <div class="hint" data-i18n="prefsHint">Customize the look and feel of your dashboard.</div>
+      <h2>Preferences</h2>
+      <div class="hint">Customize the look and feel of your dashboard.</div>
 
-      <label data-i18n="languageLabel">Language</label>
-      <div class="lang-grid">
-        <div class="lang-option selected" data-lang="en" onclick="selectLang('en')">English</div>
-        <div class="lang-option" data-lang="ko" onclick="selectLang('ko')">Korean</div>
-      </div>
-
-      <label style="margin-top:20px;" data-i18n="accentLabel">Accent Color</label>
+      <label style="margin-top:20px;">Accent Color</label>
       <div class="accent-grid">
         <div class="accent-swatch selected" data-accent="steam" onclick="selectAccent('steam')" style="background: linear-gradient(135deg, #66c0f4, #2a475e);" title="Steam Blue"></div>
         <div class="accent-swatch" data-accent="emerald" onclick="selectAccent('emerald')" style="background: linear-gradient(135deg, #5c7e10, #3d5a0a);" title="Emerald"></div>
@@ -1375,7 +1353,7 @@ input::placeholder {
         <div class="accent-swatch" data-accent="violet" onclick="selectAccent('violet')" style="background: linear-gradient(135deg, #7a5aaa, #4a3a6a);" title="Violet"></div>
       </div>
 
-      <label style="margin-top:20px;" data-i18n="portLabel">Port</label>
+      <label style="margin-top:20px;">Port</label>
       <input type="number" id="portInput" value="{{PORT}}" min="1024" max="65535" />
     </div>
   </div>
@@ -1383,8 +1361,8 @@ input::placeholder {
   <!-- Step 4: Confirm -->
   <div class="step-panel" data-step="4">
     <div class="card" style="text-align:center;">
-      <h2 data-i18n="readyTitle">Ready to Go</h2>
-      <div class="hint" style="margin-bottom:8px;" data-i18n="readyHint">
+      <h2>Ready to Go</h2>
+      <div class="hint" style="margin-bottom:8px;">
         Your dashboard will start collecting data immediately after setup.
         The first data collection may take a few minutes depending on how many days since launch.
       </div>
@@ -1393,117 +1371,15 @@ input::placeholder {
   </div>
 
   <div class="nav-buttons">
-    <button class="nav-btn prev" id="prevBtn" onclick="prevStep()" style="visibility:hidden;" data-i18n="btnBack">Back</button>
-    <button class="nav-btn next" id="nextBtn" onclick="nextStep()" data-i18n="btnNext">Next</button>
+    <button class="nav-btn prev" id="prevBtn" onclick="prevStep()" style="visibility:hidden;">Back</button>
+    <button class="nav-btn next" id="nextBtn" onclick="nextStep()">Next</button>
   </div>
 </div>
 
 <script>
 (function() {
-  var browserLang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
-  var currentLang = localStorage.getItem('dashLang') || browserLang;
-
-  var i18n = {
-    ko: {
-      setupTitle: 'Steam \\ub300\\uc2dc\\ubcf4\\ub4dc \\uc124\\uc815',
-      setupDesc: 'Steam \\uac8c\\uc784\\uc758 \\ud310\\ub9e4, \\uc218\\uc775, \\ub9ac\\ubdf0, \\ub3d9\\uc811\\uc790, \\uc704\\uc2dc\\ub9ac\\uc2a4\\ud2b8\\ub97c \\uc2e4\\uc2dc\\uac04\\uc73c\\ub85c \\ubaa8\\ub2c8\\ud130\\ub9c1\\ud569\\ub2c8\\ub2e4.',
-      stepWelcome: '\\uc18c\\uac1c', stepConnection: '\\uc5f0\\uacb0', stepTelegram: '\\uc54c\\ub9bc', stepPrefs: '\\uc124\\uc815', stepConfirm: '\\uc2dc\\uc791',
-      welcomeTitle: '\\ud658\\uc601\\ud569\\ub2c8\\ub2e4',
-      welcomeHint: '\\uc774 \\ub300\\uc2dc\\ubcf4\\ub4dc\\ub294 Steam \\uac8c\\uc784\\uc758 \\ud310\\ub9e4, \\uc218\\uc775, \\ub9ac\\ubdf0, \\ub3d9\\uc2dc \\uc811\\uc18d\\uc790, \\uc704\\uc2dc\\ub9ac\\uc2a4\\ud2b8\\ub97c \\uc2e4\\uc2dc\\uac04\\uc73c\\ub85c \\ucd94\\uc801\\ud569\\ub2c8\\ub2e4. \\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc\\ub3c4 \\ubcf4\\ub0bc \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.<br><br>\\ud544\\uc694\\ud55c \\uac83:<br>&bull; <a href="https://steamcommunity.com/dev/apikey" target="_blank">Steam Web API \\ud0a4</a><br>&bull; <a href="https://partner.steampowered.com/" target="_blank">Steamworks Financial API \\ud0a4</a> (Partner \\uc0ac\\uc774\\ud2b8\\uc5d0\\uc11c)<br>&bull; \\uac8c\\uc784\\uc758 App ID',
-      connectionTitle: 'Steam \\uc5f0\\uacb0',
-      connectionHint: 'API \\ud0a4\\ub97c \\uc785\\ub825\\ud558\\uace0 \\ubaa8\\ub2c8\\ud130\\ub9c1\\ud560 \\uac8c\\uc784\\uc744 \\ucd94\\uac00\\ud558\\uc138\\uc694. \\uc9c4\\ud589 \\uc804\\uc5d0 \\uc5f0\\uacb0\\uc744 \\ud14c\\uc2a4\\ud2b8\\ud574\\uc8fc\\uc138\\uc694.',
-      apiKeyPath: '<a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>',
-      finKeyPath: 'Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [\\uadf8\\ub8f9] &rarr; Web API Key',
-      gamesTitle: '\\uac8c\\uc784 \\ucd94\\uac00',
-      gamesHint: '\\ubaa8\\ub2c8\\ud130\\ub9c1\\ud560 \\uac8c\\uc784\\uc744 \\ucd94\\uac00\\ud558\\uc138\\uc694. \\uac8c\\uc784 \\uc774\\ub984\\uc740 \\uc790\\ub3d9\\uc73c\\ub85c \\uac00\\uc838\\uc635\\ub2c8\\ub2e4.',
-      launchDateHint: '\\uac8c\\uc784 \\ucd9c\\uc2dc\\uc77c \\ub610\\ub294 EA \\uc2dc\\uc791\\uc77c. \\uc774 \\ub0a0\\uc9dc\\ubd80\\ud130 \\ud310\\ub9e4 \\ub370\\uc774\\ud130\\ub97c \\uc218\\uc9d1\\ud569\\ub2c8\\ub2e4.',
-      addGame: '+ \\uac8c\\uc784 \\ucd94\\uac00',
-      testConnection: '\\uc5f0\\uacb0 \\ud14c\\uc2a4\\ud2b8',
-      telegramTitle: '\\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc',
-      telegramHint: '\\uc0c8 \\ud310\\ub9e4, \\ub9ac\\ubdf0, \\ub3d9\\uc811\\uc790 \\uae09\\uc99d \\uc2dc \\uc989\\uc2dc \\uc54c\\ub9bc\\uc744 \\ubc1b\\uc2b5\\ub2c8\\ub2e4. \\uc120\\ud0dd\\uc0ac\\ud56d\\uc785\\ub2c8\\ub2e4.',
-      enableTelegram: '\\ud154\\ub808\\uadf8\\ub78c \\uc54c\\ub9bc \\ud65c\\uc131\\ud654',
-      botTokenLabel: '\\ubd07 \\ud1a0\\ud070',
-      chatIdsLabel: '\\ucc44\\ud305 ID (\\uc27c\\ud45c\\ub85c \\uad6c\\ubd84)',
-      prefsTitle: '\\ud658\\uacbd \\uc124\\uc815',
-      prefsHint: '\\ub300\\uc2dc\\ubcf4\\ub4dc\\uc758 \\uc678\\uad00\\uc744 \\ucee4\\uc2a4\\ud130\\ub9c8\\uc774\\uc988\\ud558\\uc138\\uc694.',
-      languageLabel: '\\uc5b8\\uc5b4',
-      accentLabel: '\\uc561\\uc13c\\ud2b8 \\uc0c9\\uc0c1',
-      portLabel: '\\ud3ec\\ud2b8',
-      readyTitle: '\\uc900\\ube44 \\uc644\\ub8cc',
-      readyHint: '\\uc124\\uc815 \\uc644\\ub8cc \\ud6c4 \\uc989\\uc2dc \\ub370\\uc774\\ud130 \\uc218\\uc9d1\\uc744 \\uc2dc\\uc791\\ud569\\ub2c8\\ub2e4. \\ucd9c\\uc2dc\\uc77c \\uc774\\ud6c4 \\uacbd\\uacfc \\uc77c\\uc218\\uc5d0 \\ub530\\ub77c \\uccab \\uc218\\uc9d1\\uc5d0 \\uc218\\ubd84\\uc774 \\uc18c\\uc694\\ub420 \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.',
-      btnBack: '\\uc774\\uc804',
-      btnNext: '\\ub2e4\\uc74c',
-      btnStart: '\\ubaa8\\ub2c8\\ud130\\ub9c1 \\uc2dc\\uc791',
-      saving: '\\uc800\\uc7a5 \\uc911...',
-      testTesting: '\\ud14c\\uc2a4\\ud2b8 \\uc911...',
-      testApiOk: 'Web API \\ud0a4 \\ud655\\uc778',
-      testFinOk: 'Financial API \\ud0a4 \\ud655\\uc778',
-      testFinFail: 'Financial API \\ud0a4 \\uc624\\ub958 (\\ud310\\ub9e4 \\ub370\\uc774\\ud130 \\uc81c\\uc678)',
-      testGameOk: '\\ud655\\uc778',
-      testGameFail: '\\uc2e4\\ud328',
-      testFillFirst: 'API \\ud0a4\\uc640 App ID\\ub97c \\uba3c\\uc800 \\uc785\\ub825\\ud574\\uc8fc\\uc138\\uc694.',
-      testMustPass: '\\uc5f0\\uacb0 \\ud14c\\uc2a4\\ud2b8\\ub97c \\ud1b5\\uacfc\\ud574\\uc57c \\ub2e4\\uc74c\\uc73c\\ub85c \\uc9c4\\ud589\\ud560 \\uc218 \\uc788\\uc2b5\\ub2c8\\ub2e4.',
-      addGameAlert: '\\uac8c\\uc784\\uc744 \\ucd5c\\uc18c 1\\uac1c \\ucd94\\uac00\\ud574\\uc8fc\\uc138\\uc694.'
-    },
-    en: {
-      setupTitle: 'Steam Dashboard Setup',
-      setupDesc: 'Real-time sales monitoring for your Steam games. Let\\'s get you set up in a few quick steps.',
-      stepWelcome: 'INTRO', stepConnection: 'CONNECT', stepTelegram: 'ALERTS', stepPrefs: 'PREFS', stepConfirm: 'GO',
-      welcomeTitle: 'Welcome',
-      welcomeHint: 'This dashboard tracks your Steam game\\'s sales, revenue, reviews, concurrent players, and wishlists in real-time. It can also send you Telegram alerts when something happens.<br><br>You\\'ll need:<br>&bull; A <a href="https://steamcommunity.com/dev/apikey" target="_blank">Steam Web API Key</a><br>&bull; A <a href="https://partner.steampowered.com/" target="_blank">Steamworks Financial API Key</a> (from Partner site)<br>&bull; Your game\\'s App ID',
-      connectionTitle: 'Steam Connection',
-      connectionHint: 'Enter your API keys and add games to monitor. Test the connection before proceeding.',
-      apiKeyPath: '<a href="https://steamcommunity.com/dev/apikey" target="_blank">steamcommunity.com/dev/apikey</a>',
-      finKeyPath: 'Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [group] &rarr; Web API Key',
-      gamesTitle: 'Your Games',
-      gamesHint: 'Add one or more games to monitor. The game name will be fetched automatically.',
-      launchDateHint: 'Launch date or EA start date. Sales data is collected from this date.',
-      addGame: '+ Add Another Game',
-      testConnection: 'Test Connection',
-      telegramTitle: 'Telegram Alerts',
-      telegramHint: 'Get instant notifications for new sales, reviews, and player spikes. This is optional.',
-      enableTelegram: 'Enable Telegram alerts',
-      botTokenLabel: 'Bot Token',
-      chatIdsLabel: 'Chat IDs (comma-separated)',
-      prefsTitle: 'Preferences',
-      prefsHint: 'Customize the look and feel of your dashboard.',
-      languageLabel: 'Language',
-      accentLabel: 'Accent Color',
-      portLabel: 'Port',
-      readyTitle: 'Ready to Go',
-      readyHint: 'Your dashboard will start collecting data immediately after setup. The first data collection may take a few minutes depending on how many days since launch.',
-      btnBack: 'Back',
-      btnNext: 'Next',
-      btnStart: 'Start Monitoring',
-      saving: 'Saving...',
-      testTesting: 'Testing...',
-      testApiOk: 'Web API key verified',
-      testFinOk: 'Financial API key verified',
-      testFinFail: 'Financial API key error (sales data excluded)',
-      testGameOk: 'OK',
-      testGameFail: 'Failed',
-      testFillFirst: 'Please fill in the API key and at least one App ID first.',
-      testMustPass: 'Connection test must pass before proceeding.',
-      addGameAlert: 'Please add at least one game.'
-    }
-  };
-
-  function T(key) { return (i18n[currentLang] || i18n.en)[key] || (i18n.en)[key] || key; }
-
-  function applyI18n() {
-    document.querySelectorAll('[data-i18n]').forEach(function(el) {
-      var key = el.getAttribute('data-i18n');
-      if (el.tagName === 'INPUT') return;
-      el.textContent = T(key);
-    });
-    document.querySelectorAll('[data-i18n-html]').forEach(function(el) {
-      el.innerHTML = T(el.getAttribute('data-i18n-html'));
-    });
-  }
-
   var currentStep = 0;
   var totalSteps = 5;
-  var selectedLang = currentLang;
   var selectedAccent = 'steam';
   var tgEnabled = false;
   var connectionTested = false;
@@ -1523,12 +1399,8 @@ input::placeholder {
       document.getElementById('tgChatIds').value = (tg.chat_ids || []).join(', ');
     }
     var dash = existingSettings.dashboard || {};
-    selectedLang = dash.language || currentLang;
-    currentLang = selectedLang;
     selectedAccent = dash.accent || 'steam';
     if (dash.port) document.getElementById('portInput').value = dash.port;
-    selectLang(selectedLang);
-    selectAccent(selectedAccent);
   }
 
   // Initialize games list
@@ -1544,7 +1416,7 @@ input::placeholder {
       div.className = 'game-item';
       div.innerHTML =
         '<div class="field"><label>App ID</label><input type="text" value="' + (g.app_id || '') + '" onchange="updateGame(' + i + ',\\'app_id\\',this.value)" placeholder="4451370" /></div>' +
-        '<div class="field"><label>Launch Date</label><input type="date" value="' + (g.launch_date || '') + '" onchange="updateGame(' + i + ',\\'launch_date\\',this.value)" /><div class="field-hint" data-i18n="launchDateHint">' + T('launchDateHint') + '</div></div>' +
+        '<div class="field"><label>Launch Date</label><input type="date" value="' + (g.launch_date || '') + '" onchange="updateGame(' + i + ',\\'launch_date\\',this.value)" /><div class="field-hint">Launch date or EA start date. Sales data is collected from this date.</div></div>' +
         '<div class="game-status" id="gameStatus' + i + '"></div>' +
         (games.length > 1 ? '<button class="remove-btn" onclick="removeGame(' + i + ')">X</button>' : '');
       container.appendChild(div);
@@ -1583,22 +1455,15 @@ input::placeholder {
     }
   };
 
-  window.selectLang = function(lang) {
-    selectedLang = lang;
-    currentLang = lang;
-    localStorage.setItem('dashLang', lang);
-    document.querySelectorAll('.lang-option').forEach(function(el) {
-      el.classList.toggle('selected', el.getAttribute('data-lang') === lang);
-    });
-    applyI18n();
-  };
-
   window.selectAccent = function(accent) {
     selectedAccent = accent;
     document.querySelectorAll('.accent-swatch').forEach(function(el) {
       el.classList.toggle('selected', el.getAttribute('data-accent') === accent);
     });
   };
+
+  // Apply saved accent after function is defined
+  selectAccent(selectedAccent);
 
   window.testConnection = function() {
     var apiKey = document.getElementById('steamApiKey').value.trim();
@@ -1609,7 +1474,7 @@ input::placeholder {
 
     if (!apiKey || !validGames.length) {
       resultEl.className = 'test-result error';
-      resultEl.textContent = T('testFillFirst');
+      resultEl.textContent = 'Please fill in the API key and at least one App ID first.';
       return;
     }
 
@@ -1619,7 +1484,7 @@ input::placeholder {
     resultEl.style.background = 'rgba(102,192,244,0.1)';
     resultEl.style.borderColor = 'rgba(102,192,244,0.3)';
     resultEl.style.color = '#66c0f4';
-    resultEl.textContent = T('testTesting');
+    resultEl.textContent = 'Testing...';
 
     // Reset statuses
     document.getElementById('apiKeyStatus').className = 'key-status pending';
@@ -1646,7 +1511,7 @@ input::placeholder {
         if (data.api_key_valid) {
           apiSt.className = 'key-status ok';
           apiSt.textContent = '\\u2713';
-          lines.push('\\u2713 ' + T('testApiOk'));
+          lines.push('\\u2713 Web API key verified');
         } else {
           apiSt.className = 'key-status fail';
           apiSt.textContent = '\\u2717';
@@ -1658,11 +1523,11 @@ input::placeholder {
           if (data.financial_key_valid) {
             finSt.className = 'key-status ok';
             finSt.textContent = '\\u2713';
-            lines.push('\\u2713 ' + T('testFinOk'));
+            lines.push('\\u2713 Financial API key verified');
           } else {
             finSt.className = 'key-status fail';
             finSt.textContent = '\\u2717';
-            lines.push('\\u2717 ' + T('testFinFail'));
+            lines.push('\\u2717 Financial API key error (sales data excluded)');
           }
         }
 
@@ -1717,13 +1582,13 @@ input::placeholder {
     document.getElementById('prevBtn').style.visibility = step === 0 ? 'hidden' : 'visible';
     var nextBtn = document.getElementById('nextBtn');
     if (step === totalSteps - 1) {
-      nextBtn.textContent = T('btnStart');
+      nextBtn.textContent = 'Start Monitoring';
       nextBtn.className = 'nav-btn start';
     } else {
-      nextBtn.textContent = T('btnNext');
+      nextBtn.textContent = 'Next';
       nextBtn.className = 'nav-btn next';
     }
-    document.getElementById('prevBtn').textContent = T('btnBack');
+    document.getElementById('prevBtn').textContent = 'Back';
     updateStepDots();
 
     // Build summary on last step
@@ -1732,7 +1597,6 @@ input::placeholder {
       lines.push('Games: ' + games.filter(function(g){return g.app_id;}).map(function(g){return g.app_id + (g.name ? ' (' + g.name + ')' : '');}).join(', '));
       lines.push('Telegram: ' + (tgEnabled ? 'ON' : 'OFF'));
       lines.push('Accent: ' + selectedAccent);
-      lines.push('Language: ' + selectedLang);
       lines.push('Port: ' + document.getElementById('portInput').value);
       document.getElementById('setupSummary').innerHTML = lines.join('<br>');
     }
@@ -1743,7 +1607,7 @@ input::placeholder {
     if (currentStep === 1 && !connectionTested) {
       var resultEl = document.getElementById('testResult');
       resultEl.className = 'test-result error';
-      resultEl.textContent = T('testMustPass');
+      resultEl.textContent = 'Connection test must pass before proceeding.';
       return;
     }
 
@@ -1777,7 +1641,7 @@ input::placeholder {
   function submitSetup() {
     var validGames = games.filter(function(g) { return g.app_id; });
     if (!validGames.length) {
-      alert(T('addGameAlert'));
+      alert('Please add at least one game.');
       return;
     }
 
@@ -1796,7 +1660,7 @@ input::placeholder {
       dashboard: {
         port: parseInt(document.getElementById('portInput').value) || 8081,
         poll_interval: 300,
-        language: selectedLang,
+        language: 'en',
         theme: 'dark',
         accent: selectedAccent
       }
@@ -1804,7 +1668,7 @@ input::placeholder {
 
     var nextBtn = document.getElementById('nextBtn');
     nextBtn.disabled = true;
-    nextBtn.textContent = T('saving');
+    nextBtn.textContent = 'Saving...';
 
     var endpoint = existingSettings && existingSettings.steam_api_key ? '/api/settings' : '/api/setup';
 
@@ -1817,17 +1681,16 @@ input::placeholder {
         window.location.href = '/';
       } else {
         nextBtn.disabled = false;
-        nextBtn.textContent = T('btnStart');
+        nextBtn.textContent = 'Start Monitoring';
         alert('Error: ' + (data.error || 'Unknown'));
       }
     }).catch(function(e) {
       nextBtn.disabled = false;
-      nextBtn.textContent = T('btnStart');
+      nextBtn.textContent = 'Start Monitoring';
       alert('Network error: ' + e.message);
     });
   }
 
-  applyI18n();
 })();
 </script>
 </body>
@@ -1837,17 +1700,17 @@ input::placeholder {
 # ========== DASHBOARD HTML ==========
 
 DASHBOARD_HTML_TEMPLATE = '''<!DOCTYPE html>
-<html lang="{{LANGUAGE}}">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA2NCA2NCI+CiAgPHJlY3Qgd2lkdGg9IjY0IiBoZWlnaHQ9IjY0IiByeD0iMTIiIGZpbGw9IiMxNzFhMjEiLz4KICA8cmVjdCB4PSIxMCIgeT0iMjIiIHdpZHRoPSI0NCIgaGVpZ2h0PSIzMiIgcng9IjMiIGZpbGw9IiMxYjI4MzgiIG9wYWNpdHk9IjAuNiIvPgogIDxyZWN0IHg9IjE0IiB5PSI0MCIgd2lkdGg9IjYiIGhlaWdodD0iMTIiIHJ4PSIxIiBmaWxsPSIjMmE0NzVlIi8+CiAgPHJlY3QgeD0iMjIiIHk9IjM0IiB3aWR0aD0iNiIgaGVpZ2h0PSIxOCIgcng9IjEiIGZpbGw9IiMzZDZjOGUiLz4KICA8cmVjdCB4PSIzMCIgeT0iMjgiIHdpZHRoPSI2IiBoZWlnaHQ9IjI0IiByeD0iMSIgZmlsbD0iIzY2YzBmNCIvPgogIDxyZWN0IHg9IjM4IiB5PSIzMiIgd2lkdGg9IjYiIGhlaWdodD0iMjAiIHJ4PSIxIiBmaWxsPSIjNjZjMGY0Ii8+CiAgPHJlY3QgeD0iNDYiIHk9IjI0IiB3aWR0aD0iNiIgaGVpZ2h0PSIyOCIgcng9IjEiIGZpbGw9IiM2NmMwZjQiLz4KICA8cG9seWxpbmUgcG9pbnRzPSIxNywzOCAyNSwzMiAzMywyNiA0MSwzMCA0OSwyMiIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTRkMDA3IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIi8+CiAgPGNpcmNsZSBjeD0iMTciIGN5PSIzOCIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iMzMiIGN5PSIyNiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+CiAgPGNpcmNsZSBjeD0iNDkiIGN5PSIyMiIgcj0iMi41IiBmaWxsPSIjYTRkMDA3Ii8+Cjwvc3ZnPg==">
 <title>Steam Dashboard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root {
-  --font-body: 'Noto Sans KR', 'Noto Sans', -apple-system, sans-serif;
+  --font-body: 'Noto Sans', -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --radius-sm: 4px;
   --radius-md: 4px;
@@ -1962,16 +1825,6 @@ body {
 .header-buttons {
   display: flex; gap: 6px; align-items: center; margin-top: 4px;
 }
-.lang-toggle {
-  display: inline-flex; gap: 0; border-radius: 2px; overflow: hidden;
-  border: 1px solid var(--border-color); font-size: 11px;
-}
-.lang-toggle button {
-  background: transparent; border: none; color: var(--text-tertiary);
-  padding: 3px 8px; cursor: pointer; font-family: var(--font-mono);
-  font-size: 11px; transition: all 0.2s;
-}
-.lang-toggle button.active { background: var(--bg-elevated); color: #ffffff; }
 .settings-btn {
   background: transparent; border: 1px solid var(--border-color);
   color: var(--text-tertiary); padding: 3px 8px; border-radius: 2px;
@@ -2209,12 +2062,8 @@ body {
   <div class="header-controls">
     <div class="live-indicator"><span class="live-dot"></span>LIVE</div>
     <div class="update-time" id="lastUpdate">--</div>
-    <div class="poll-info" data-i18n="pollInfo">5min poll</div>
+    <div class="poll-info">5min poll &middot; 30s refresh</div>
     <div class="header-buttons">
-      <div class="lang-toggle">
-        <button id="langKo" onclick="setLang('ko')">KR</button>
-        <button id="langEn" onclick="setLang('en')">EN</button>
-      </div>
       <a class="settings-btn" href="/settings" title="Settings">\u2699</a>
     </div>
     <div class="game-selector" id="gameSelector"></div>
@@ -2224,52 +2073,52 @@ body {
 <div class="dashboard">
   <div class="metrics-grid">
     <div class="metric-card">
-      <div class="metric-label" data-i18n="totalSales">Total Sales</div>
+      <div class="metric-label">Total Sales</div>
       <div class="metric-value gold loading" id="totalSales">--</div>
       <div class="metric-sub" id="salesSub"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="netRevenue">Net Revenue</div>
+      <div class="metric-label">Net Revenue</div>
       <div class="metric-value green loading" id="netRevenue">--</div>
       <div class="metric-sub" id="revenueSub"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="playersOnline">Players Online</div>
+      <div class="metric-label">Players Online</div>
       <div class="metric-value loading" id="currentPlayers">--</div>
       <div class="metric-sub" id="playerChange"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="peakPlayers">Peak Players</div>
+      <div class="metric-label">Peak Players</div>
       <div class="metric-value loading" id="peakPlayers">--</div>
-      <div class="metric-sub" data-i18n="sessionHigh">Session high</div>
+      <div class="metric-sub">Session high</div>
     </div>
   </div>
   <div class="metrics-grid">
     <div class="metric-card">
-      <div class="metric-label" data-i18n="reviews">Reviews</div>
+      <div class="metric-label">Reviews</div>
       <div class="metric-value loading" id="totalReviews">--</div>
       <div class="metric-sub" id="reviewRatio"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="positiveRate">Positive Rate</div>
+      <div class="metric-label">Positive Rate</div>
       <div class="metric-value green loading" id="positiveRate">--</div>
       <div class="metric-sub" id="reviewScore"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="wishlists">Wishlists</div>
+      <div class="metric-label">Wishlists</div>
       <div class="metric-value loading" id="wishlistNet">--</div>
       <div class="metric-sub" id="wishlistSub"></div>
     </div>
     <div class="metric-card">
-      <div class="metric-label" data-i18n="refundRate">Refund Rate</div>
+      <div class="metric-label">Refund Rate</div>
       <div class="metric-value loading" id="refundRate">--</div>
-      <div class="metric-sub" data-i18n="refundSales">returns / sales</div>
+      <div class="metric-sub">returns / sales</div>
     </div>
   </div>
-  <div class="section-header"><h2 data-i18n="salesPerf">Sales Performance</h2></div>
+  <div class="section-header"><h2>Sales Performance</h2></div>
   <div id="cumChartsRow" class="charts-grid">
     <div class="chart-card">
-      <h3 id="cumSalesTitle" data-i18n-html="cumSales">Cumulative Sales &amp; Revenue</h3>
+      <h3 id="cumSalesTitle">Cumulative Sales &amp; Revenue</h3>
       <canvas id="salesTimelineChart" height="180"></canvas>
     </div>
     <div class="chart-card" id="cumRevenueCard" style="display:none;">
@@ -2279,11 +2128,11 @@ body {
   </div>
   <div class="charts-row">
     <div class="chart-card">
-      <h3 data-i18n-html="dailySales">Daily Sales &amp; Revenue</h3>
+      <h3>Daily Sales &amp; Revenue</h3>
       <canvas id="salesChart" height="220"></canvas>
     </div>
     <div class="chart-card">
-      <h3 data-i18n="playerActivity">Player Activity</h3>
+      <h3>Player Activity</h3>
       <canvas id="playerChart" height="220"></canvas>
     </div>
   </div>
@@ -2293,18 +2142,18 @@ body {
       <canvas id="wishlistChart" height="180"></canvas>
     </div>
   </div>
-  <div class="section-header"><h2 data-i18n="geoBreakdown">Geographic Breakdown</h2></div>
+  <div class="section-header"><h2>Geographic Breakdown</h2></div>
   <div class="country-grid">
     <div class="country-card">
-      <h3 data-i18n="salesByCountryLabel">Sales by Country</h3>
+      <h3>Sales by Country</h3>
       <div id="salesByCountry"></div>
     </div>
     <div class="country-card">
-      <h3 data-i18n="wlByCountry">Wishlists by Country</h3>
+      <h3>Wishlists by Country</h3>
       <div id="wishlistByCountry"></div>
     </div>
   </div>
-  <div class="section-header"><h2 data-i18n="recentReviews">Recent Reviews</h2></div>
+  <div class="section-header"><h2>Recent Reviews</h2></div>
   <div class="reviews-grid" id="recentReviews"></div>
 </div>
 
@@ -2318,13 +2167,11 @@ body {
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <script>
 (function() {
-  var browserLang = (navigator.language || '').startsWith('ko') ? 'ko' : 'en';
   var rootEl = document.documentElement;
   rootEl.setAttribute('data-theme', '{{THEME}}');
   rootEl.setAttribute('data-accent', '{{ACCENT}}');
 
   var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart;
-  var curLang = localStorage.getItem('dashLang') || browserLang;
   var currentAppId = '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
   var isPortfolioMode = false;
@@ -2363,89 +2210,6 @@ body {
     rebuildCharts();
     fetchData();
   }
-
-  var i18n = {
-    ko: {
-      totalSales: '\uCD1D \uD310\uB9E4', netRevenue: '\uC21C\uC218\uC775',
-      playersOnline: '\uD604\uC7AC \uB3D9\uC811', peakPlayers: '\uD53C\uD06C \uB3D9\uC811',
-      sessionHigh: '\uC138\uC158 \uCD5C\uACE0\uCE58', reviews: '\uB9AC\uBDF0',
-      positiveRate: '\uAE0D\uC815\uB960', wishlists: '\uC704\uC2DC\uB9AC\uC2A4\uD2B8',
-      refundRate: '\uD658\uBD88\uB960', refundSales: '\uD658\uBD88 / \uD310\uB9E4',
-      salesPerf: '\uD310\uB9E4 \uD604\uD669',
-      cumSales: '\uB204\uC801 \uD310\uB9E4 &amp; \uC218\uC775',
-      dailySales: '\uC77C\uBCC4 \uD310\uB9E4 &amp; \uC218\uC775',
-      playerActivity: '\uB3D9\uC811\uC790 \uCD94\uC774',
-      geoBreakdown: '\uAD6D\uAC00\uBCC4 \uD604\uD669',
-      salesByCountryLabel: '\uAD6D\uAC00\uBCC4 \uD310\uB9E4',
-      wlByCountry: '\uAD6D\uAC00\uBCC4 \uC704\uC2DC\uB9AC\uC2A4\uD2B8',
-      recentReviews: '\uCD5C\uADFC \uB9AC\uBDF0',
-      pollInfo: '5\uBD84 \uD3F4\uB9C1 \u00B7 30\uCD08 \uAC31\uC2E0',
-      collecting: '\uB370\uC774\uD130 \uC218\uC9D1 \uC911...',
-      noChange: '\u2014 \uBCC0\uB3D9 \uC5C6\uC74C',
-      refunds: '\uD658\uBD88', grossLabel: '\uCD1D\uB9E4\uCD9C',
-      beforeFees: '\uC218\uC218\uB8CC \uC804', conversion: '\uAD6C\uB9E4\uC804\uD658',
-      hours: '\uC2DC\uAC04', unitSuffix: '\uAC74',
-      chartCumSales: '\uB204\uC801 \uD310\uB9E4 (\uAC74)',
-      chartCumRev: '\uB204\uC801 \uC21C\uC218\uC775 ($)',
-      chartSales: '\uD310\uB9E4 (\uAC74)', chartRefunds: '\uD658\uBD88',
-      chartNetRev: '\uC21C\uC218\uC775 ($)', chartUnits: '\uAC74\uC218',
-      chartRevenue: '\uC218\uC775 ($)', chartPlayers: '\uB3D9\uC811',
-      chartSalesAxis: '\uD310\uB9E4 (\uAC74)', chartRevenueAxis: '\uC218\uC775 ($)',
-      allGames: '\uC804\uCCB4 \uAC8C\uC784'
-    },
-    en: {
-      totalSales: 'Total Sales', netRevenue: 'Net Revenue',
-      playersOnline: 'Players Online', peakPlayers: 'Peak Players',
-      sessionHigh: 'Session high', reviews: 'Reviews',
-      positiveRate: 'Positive Rate', wishlists: 'Wishlists',
-      refundRate: 'Refund Rate', refundSales: 'returns / sales',
-      salesPerf: 'Sales Performance',
-      cumSales: 'Cumulative Sales &amp; Revenue',
-      dailySales: 'Daily Sales &amp; Revenue',
-      playerActivity: 'Player Activity',
-      geoBreakdown: 'Geographic Breakdown',
-      salesByCountryLabel: 'Sales by Country',
-      wlByCountry: 'Wishlists by Country',
-      recentReviews: 'Recent Reviews',
-      pollInfo: '5min poll \u00B7 30s refresh',
-      collecting: 'Collecting data...',
-      noChange: '\u2014 no change',
-      refunds: 'refunds', grossLabel: 'gross',
-      beforeFees: 'before fees', conversion: 'conv.',
-      hours: 'h', unitSuffix: '',
-      chartCumSales: 'Cumulative Sales', chartCumRev: 'Net Revenue ($)',
-      chartSales: 'Sales', chartRefunds: 'Refunds',
-      chartNetRev: 'Net Revenue ($)', chartUnits: 'Units',
-      chartRevenue: 'Revenue ($)', chartPlayers: 'Players',
-      chartSalesAxis: 'Sales', chartRevenueAxis: 'Revenue ($)',
-      allGames: 'All Games'
-    }
-  };
-
-  function T(key) { var v = (i18n[curLang] || i18n.en)[key]; return v !== undefined ? v : key; }
-
-  function applyStaticLabels() {
-    document.querySelectorAll('[data-i18n]').forEach(function(el) {
-      el.textContent = T(el.getAttribute('data-i18n'));
-    });
-    document.querySelectorAll('[data-i18n-html]').forEach(function(el) {
-      el.innerHTML = T(el.getAttribute('data-i18n-html'));
-    });
-  }
-
-  function updateToggleButtons() {
-    document.getElementById('langKo').className = curLang === 'ko' ? 'active' : '';
-    document.getElementById('langEn').className = curLang === 'en' ? 'active' : '';
-  }
-
-  window.setLang = function(lang) {
-    curLang = lang;
-    localStorage.setItem('dashLang', lang);
-    applyStaticLabels();
-    updateToggleButtons();
-    rebuildCharts();
-    fetchData();
-  };
 
   function getChartColors() {
     var cs = getComputedStyle(rootEl);
@@ -2500,7 +2264,7 @@ body {
     };
     var baseTooltip = {
       backgroundColor: cc.tooltipBg, borderColor: cc.tooltipBorder, borderWidth: 1,
-      titleFont: { family: "'Noto Sans', 'Noto Sans KR'", weight: '600' },
+      titleFont: { family: "'Noto Sans'", weight: '600' },
       bodyFont: { family: "'JetBrains Mono'", size: 12 },
       padding: 12, cornerRadius: 4, displayColors: true, boxPadding: 4
     };
@@ -2509,7 +2273,7 @@ body {
       animation: { duration: 500, easing: 'easeOutQuart' },
       interaction: { mode: 'index', intersect: false }
     };
-    var legendCfg = { display: true, labels: { color: cc.legend, usePointStyle: true, pointStyle: 'circle', padding: 16, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 12 } } };
+    var legendCfg = { display: true, labels: { color: cc.legend, usePointStyle: true, pointStyle: 'circle', padding: 16, font: { family: "'Noto Sans'", size: 12 } } };
 
     if (isPortfolioMode) {
       // Stacked cumulative sales
@@ -2546,8 +2310,8 @@ body {
           plugins: { legend: legendCfg, tooltip: baseTooltip },
           scales: {
             x: Object.assign({}, baseScaleX, { stacked: true }),
-            y: Object.assign({}, baseScaleY, { stacked: true, position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
-            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+            y: Object.assign({}, baseScaleY, { stacked: true, position: 'left', title: { display: !isMobile, text: 'Units', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: 'Revenue ($)', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } })
           }
         })
       });
@@ -2568,15 +2332,15 @@ body {
       salesTimelineChart = new Chart(document.getElementById('salesTimelineChart'), {
         type: 'line',
         data: { labels: [], datasets: [
-          { label: T('chartCumSales'), data: [], borderColor: cc.gold, backgroundColor: cc.goldFill, fill: true, tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.gold, pointBorderColor: 'transparent', borderWidth: 2.5, yAxisID: 'y' },
-          { label: T('chartCumRev'), data: [], borderColor: cc.green, backgroundColor: 'transparent', borderDash: [6, 4], tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.green, pointBorderColor: 'transparent', borderWidth: 2, yAxisID: 'y1' }
+          { label: 'Cumulative Sales', data: [], borderColor: cc.gold, backgroundColor: cc.goldFill, fill: true, tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.gold, pointBorderColor: 'transparent', borderWidth: 2.5, yAxisID: 'y' },
+          { label: 'Net Revenue ($)', data: [], borderColor: cc.green, backgroundColor: 'transparent', borderDash: [6, 4], tension: 0.35, pointRadius: pr, pointHoverRadius: phr, pointBackgroundColor: cc.green, pointBorderColor: 'transparent', borderWidth: 2, yAxisID: 'y1' }
         ]},
         options: Object.assign({}, baseOpts, {
           plugins: { legend: legendCfg, tooltip: baseTooltip },
           scales: {
             x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
-            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartSalesAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
-            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: 'Sales', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: 'Revenue ($)', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } })
           }
         })
       });
@@ -2585,16 +2349,16 @@ body {
       salesChart = new Chart(document.getElementById('salesChart'), {
         type: 'bar',
         data: { labels: [], datasets: [
-          { label: T('chartSales'), data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
-          { label: T('chartRefunds'), data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
-          { label: T('chartNetRev'), data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
+          { label: 'Sales', data: [], backgroundColor: cc.gold, borderRadius: 2, yAxisID: 'y', order: 2, barPercentage: 0.7 },
+          { label: 'Refunds', data: [], backgroundColor: cc.red, borderRadius: 2, yAxisID: 'y', order: 3, barPercentage: 0.7 },
+          { label: 'Net Revenue ($)', data: [], type: 'line', borderColor: cc.green, backgroundColor: 'transparent', borderWidth: 2, pointRadius: Math.max(1, pr - 1), pointHoverRadius: Math.max(2, phr - 1), pointBackgroundColor: cc.green, pointBorderColor: 'transparent', tension: 0.35, yAxisID: 'y1', order: 1 }
         ]},
         options: Object.assign({}, baseOpts, {
           plugins: { legend: legendCfg, tooltip: baseTooltip },
           scales: {
             x: baseScaleX,
-            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: T('chartUnits'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } }),
-            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: T('chartRevenueAxis'), color: cc.tick, font: { family: "'Noto Sans', 'Noto Sans KR'", size: 11 } } })
+            y: Object.assign({}, baseScaleY, { position: 'left', title: { display: !isMobile, text: 'Units', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } }),
+            y1: Object.assign({}, baseScaleY, { position: 'right', grid: { drawOnChartArea: false }, title: { display: !isMobile, text: 'Revenue ($)', color: cc.tick, font: { family: "'Noto Sans'", size: 11 } } })
           }
         })
       });
@@ -2602,7 +2366,7 @@ body {
       playerChart = new Chart(document.getElementById('playerChart'), {
         type: 'line',
         data: { labels: [], datasets: [{
-          label: T('chartPlayers'), data: [],
+          label: 'Players', data: [],
           borderColor: cc.purple, backgroundColor: cc.purpleFill,
           fill: true, tension: 0.35, pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: cc.purple, pointBorderColor: 'transparent', borderWidth: 2
@@ -2713,7 +2477,7 @@ body {
     });
 
     dailyBarDatasets.push({
-      label: T('chartNetRev'),
+      label: 'Net Revenue ($)',
       data: combinedRevArr.map(function(v) { return Math.round(v * 100) / 100; }),
       type: 'line', borderColor: getChartColors().green, backgroundColor: 'transparent',
       borderWidth: 2, pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
@@ -2765,7 +2529,7 @@ body {
     fetch(url).then(function(resp) { return resp.json(); }).then(function(data) {
       // Header
       if (isPortfolioMode) {
-        document.getElementById('gameName').textContent = T('allGames') || 'All Games';
+        document.getElementById('gameName').textContent = 'All Games';
         document.getElementById('gameDev').textContent = allGames.length + ' games';
         document.getElementById('headerImg').src = '';
         document.getElementById('headerImg').style.display = 'none';
@@ -2779,7 +2543,7 @@ body {
         document.getElementById('gamePrice').style.display = '';
         document.getElementById('cumRevenueCard').style.display = 'none';
         document.getElementById('cumChartsRow').className = 'charts-grid';
-        document.getElementById('cumSalesTitle').innerHTML = T('cumSales') || 'Cumulative Sales &amp; Revenue';
+        document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales &amp; Revenue';
         if (data.app_details) {
           var d = data.app_details;
           document.getElementById('gameName').textContent = d.name || '';
@@ -2791,11 +2555,10 @@ body {
       document.querySelectorAll('.metric-value.loading').forEach(function(el) { el.classList.remove('loading'); });
 
       var s = isPortfolioMode ? (data.totals || {}) : (data.sales_totals || {});
-      var suffix = T('unitSuffix');
       document.getElementById('totalSales').textContent = (s.units || 0).toLocaleString();
-      document.getElementById('salesSub').textContent = T('refunds') + ' ' + (s.returns || 0) + suffix + ' \u00B7 ' + T('grossLabel') + ' $' + (s.gross || 0).toFixed(0);
+      document.getElementById('salesSub').textContent = 'refunds ' + (s.returns || 0) + ' \u00B7 gross $' + (s.gross || 0).toFixed(0);
       document.getElementById('netRevenue').textContent = '$' + (s.net || 0).toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0});
-      document.getElementById('revenueSub').textContent = T('beforeFees') + ' $' + (s.gross || 0).toFixed(0);
+      document.getElementById('revenueSub').textContent = 'before fees $' + (s.gross || 0).toFixed(0);
       document.getElementById('refundRate').textContent = (s.units > 0 ? ((s.returns / s.units) * 100).toFixed(1) : '0') + '%';
 
       var players = data.current_players || 0;
@@ -2808,7 +2571,7 @@ body {
           var prev = hist[hist.length - 2][1];
           var diff = players - prev;
           var el = document.getElementById('playerChange');
-          el.textContent = diff > 0 ? '\u25B2 +' + diff : diff < 0 ? '\u25BC ' + diff : T('noChange');
+          el.textContent = diff > 0 ? '\u25B2 +' + diff : diff < 0 ? '\u25BC ' + diff : '\u2014 no change';
           el.style.color = diff > 0 ? 'var(--green-bright)' : diff < 0 ? 'var(--red)' : 'var(--text-tertiary)';
         }
       } else {
@@ -2866,12 +2629,12 @@ body {
 
       var wl = data.wishlist || {};
       document.getElementById('wishlistNet').textContent = '~' + (wl.net || 0).toLocaleString();
-      document.getElementById('wishlistSub').textContent = '+' + (wl.adds||0) + ' / -' + (wl.deletes||0) + ' / ' + T('conversion') + ' ' + (wl.purchases||0);
+      document.getElementById('wishlistSub').textContent = '+' + (wl.adds||0) + ' / -' + (wl.deletes||0) + ' / conv. ' + (wl.purchases||0);
 
       var esc = function(str) { var d = document.createElement('div'); d.textContent = String(str); return d.innerHTML; };
       var renderCountryTable = function(obj, valFn) {
         var entries = Object.entries(obj).slice(0, 15);
-        if (!entries.length) return '<div style="color:var(--text-tertiary);font-style:italic;padding:12px 0;">' + T('collecting') + '</div>';
+        if (!entries.length) return '<div style="color:var(--text-tertiary);font-style:italic;padding:12px 0;">' + 'Collecting data...' + '</div>';
         var maxVal = Math.max(1, valFn(entries[0][1]));
         return '<table class="country-table">' + entries.map(function(entry) {
           var cc = esc(entry[0]); var d = entry[1]; var val = valFn(d);
@@ -2895,7 +2658,7 @@ body {
         }
         var text = esc((r.review || '').substring(0, 300)).split(String.fromCharCode(10)).join(' ');
         var gameTag = (isPortfolioMode && r.game_name) ? '<span class="review-game">' + esc(r.game_name) + '</span>' : '';
-        return '<div class="review-card"><div class="review-header"><span class="review-thumb ' + thumbClass + '">' + thumb + '</span>' + gameTag + '<span class="review-author">' + esc(r.author && r.author.personaname || 'Anonymous') + '</span><span class="review-playtime">' + reviewDate + playtime + T('hours') + '</span></div><div class="review-text">' + text + '</div></div>';
+        return '<div class="review-card"><div class="review-header"><span class="review-thumb ' + thumbClass + '">' + thumb + '</span>' + gameTag + '<span class="review-author">' + esc(r.author && r.author.personaname || 'Anonymous') + '</span><span class="review-playtime">' + reviewDate + playtime + 'h' + '</span></div><div class="review-text">' + text + '</div></div>';
       }).join('');
 
       document.getElementById('tgDot').className = 'dot ' + (data.telegram_active ? 'on' : 'off');
@@ -2907,8 +2670,6 @@ body {
     }).catch(function(e) { console.error('Fetch error:', e); fetchFailCount++; });
   }
 
-  applyStaticLabels();
-  updateToggleButtons();
   initCharts();
 
   var hasInitialResize = false;
@@ -3258,7 +3019,6 @@ def build_dashboard_html():
     html = DASHBOARD_HTML_TEMPLATE
     html = html.replace('{{THEME}}', dash.get('theme', 'dark'))
     html = html.replace('{{ACCENT}}', dash.get('accent', 'steam'))
-    html = html.replace('{{LANGUAGE}}', dash.get('language', 'en'))
     html = html.replace('{{POLL_INTERVAL}}', str(dash.get('poll_interval', 300)))
     html = html.replace('{{DEFAULT_APP_ID}}', default_app_id)
     html = html.replace('{{GAMES_JSON}}', json.dumps(games, ensure_ascii=False))
@@ -3295,7 +3055,6 @@ def main():
         print(f"  Polling:    {dash.get('poll_interval', 300) // 60}min")
         print(f"  Telegram:   {'ON (' + str(tg_count) + ' recipients)' if tg_on else 'OFF'}")
         print(f"  Theme:      {dash.get('theme', 'dark')} / {dash.get('accent', 'steam')}")
-        print(f"  Language:   {dash.get('language', 'en')}")
         print("=" * 50)
     else:
         print("=" * 50)

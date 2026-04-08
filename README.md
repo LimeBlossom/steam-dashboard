@@ -1,31 +1,23 @@
 # Steam Dashboard
 
-**Real-time Steam sales monitoring for indie game developers. Single Python file, zero dependencies.**
+**Self-hosted real-time monitoring for Steam sales, wishlists, reviews, and concurrent players. Single Python file, zero dependencies.**
 
 [![Python 3.8+](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/Sponsor-%E2%9D%A4-ea4aaa.svg)](https://github.com/sponsors/chihyunn)
 
-**English** | [한국어](README_KO.md)
-
-![Dashboard](screenshots/dashboard.png)
-
-## Why This Exists
-
-> After launching my game on Steam, I caught myself refreshing the Steamworks sales page twelve times a day. So I built this.
-
-Steam Dashboard is a self-hosted monitoring tool that pulls your sales, wishlists, reviews, and player counts into a single real-time view — with Telegram alerts so you never have to refresh again.
+<!-- TODO: Add your own screenshot here -->
+<!-- ![Dashboard](screenshots/dashboard.png) -->
 
 ## Features
 
 - **Real-time sales & revenue tracking** — sales, revenue, refunds, all in one place
+- **Portfolio overview** — monitor all your titles from a single view
 - **Telegram instant alerts** — new sale, new review, player spike
 - **Country-level breakdown** — sales and wishlist data by region
 - **Concurrent player monitoring** — trend charts with historical data
 - **Wishlist tracking** — adds, removes, and conversion rates
 - **Web-based setup wizard** — no config files to edit, ever
 - **Multi-game support** — monitor all your titles from one dashboard
-- **Korean & English UI** — auto-detects browser language
 - **Mobile-friendly** — responsive design, check sales from your phone
 - **Single Python file** — no pip install, no virtualenv, no Docker
 - **100% self-hosted** — your data never leaves your server
@@ -34,7 +26,7 @@ Steam Dashboard is a self-hosted monitoring tool that pulls your sales, wishlist
 
 ```bash
 # 1. Clone
-git clone https://github.com/chihyunn/steam-dashboard.git
+git clone https://github.com/LimeBlossom/steam-dashboard.git
 cd steam-dashboard
 
 # 2. Run
@@ -46,16 +38,6 @@ python3 dashboard.py
 ```
 
 That's it. No `requirements.txt`, no `.env` files, no database setup.
-
-## Screenshots
-
-| Setup Wizard | Dashboard |
-|:---:|:---:|
-| ![Setup](screenshots/setup-wizard.png) | ![Dashboard](screenshots/dashboard.png) |
-
-| Mobile View | Telegram Alerts |
-|:---:|:---:|
-| ![Mobile](screenshots/mobile.png) | ![Telegram](screenshots/telegram.png) |
 
 ## Getting Your API Keys
 
@@ -176,17 +158,6 @@ location / {
 
 Or restrict access by IP using your firewall.
 
-## How It Compares
-
-| Feature | Steam Dashboard | Steamboard | Steamworks Extras |
-|---|:---:|:---:|:---:|
-| Self-hosted | Yes | Yes | N/A |
-| Zero dependencies | Yes | No (Electron) | No (Chrome) |
-| Telegram alerts | Yes | No | No |
-| Multi-game | Yes | No | No |
-| Mobile-friendly | Yes | No | No |
-| Web setup wizard | Yes | No | N/A |
-
 ## Configuration
 
 Everything is configured through the web UI. There are no config files to edit.
@@ -211,9 +182,8 @@ Before submitting a PR:
 
 ## License
 
-MIT
+MIT — Originally based on [steam-dashboard](https://github.com/chihyunn/steam-dashboard) by chihyunn.
 
 ---
 
-Built with coffee by an indie game developer.
-If this saves you from refreshing Steamworks, [consider sponsoring](https://github.com/sponsors/chihyunn).
+Built and maintained by [Lime Blossom Studio](https://github.com/LimeBlossom).
