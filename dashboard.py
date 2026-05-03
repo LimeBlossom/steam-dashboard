@@ -336,14 +336,15 @@ def get_app_details(app_id):
 
 
 def get_game_info_from_api(app_id):
-    """Fetch name and launch date from Steam store API."""
+    """Fetch name, launch date, and coming_soon flag from Steam store API."""
     details = get_app_details(app_id)
     if not details:
-        return f"App {app_id}", None
+        return f"App {app_id}", None, False
     name = details.get("name", f"App {app_id}")
     launch_date = None
     rd = details.get("release_date", {})
-    if not rd.get("coming_soon") and rd.get("date"):
+    coming_soon = bool(rd.get("coming_soon"))
+    if not coming_soon and rd.get("date"):
         try:
             launch_date = datetime.strptime(rd["date"], "%b %d, %Y").strftime("%Y-%m-%d")
         except ValueError:
@@ -351,7 +352,7 @@ def get_game_info_from_api(app_id):
                 launch_date = datetime.strptime(rd["date"], "%d %b, %Y").strftime("%Y-%m-%d")
             except ValueError:
                 pass
-    return name, launch_date
+    return name, launch_date, coming_soon
 
 
 def get_reviews(app_id):
@@ -475,7 +476,9 @@ def find_earliest_wishlist_date(financial_key, app_id, launch_date):
     return result
 
 
-def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, collector=None, game_state=None):
+def refresh_all_sales(financial_key, app_id, launch_date, on_progress=None, collector=None, game_state=None, unreleased=False):
+    if unreleased:
+        return
     app_id = str(app_id)
     launch = datetime.strptime(launch_date, "%Y-%m-%d").date()
     today = datetime.now().date()
@@ -699,7 +702,23 @@ def send_startup_report(settings, game):
     app_id = game['app_id']
     game_name = game.get('name', app_id)
     tg = settings.get('telegram', {})
-    financial_key = settings['steam_financial_key']
+    unreleased = bool(game.get('unreleased', False))
+
+    if unreleased:
+        wl = load_wishlist_totals(app_id)
+        msg = (
+            f"\U0001f377 <b>{game_name} Dashboard Online</b>\n"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+            f"\n"
+            f"\U0001f4ca <b>Pre-Launch</b>\n"
+            f"  Wishlists: <b>{wl.get('net', 0)}</b>\n"
+            f"  Adds: {wl.get('adds', 0)} / Deletes: {wl.get('deletes', 0)}\n"
+            f"\n"
+            f"\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+            f"\U0001f514 Monitoring started"
+        )
+        send_telegram(tg, msg)
+        return
 
     totals = get_sales_totals(app_id)
     units, returns, gross, net = totals
@@ -797,6 +816,7 @@ class DataCollector:
             app_id = str(game['app_id'])
             launch_date = game.get('launch_date', '2025-01-01')
             game_name = game.get('name', app_id)
+            unreleased = bool(game.get('unreleased', False))
             gs = self.get_state(app_id)
 
             # Players + Reviews
@@ -826,13 +846,17 @@ class DataCollector:
                     self.status = f"{game_name}: {label} {ds}"
                 return _inner
 
-            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"), collector=self, game_state=gs)
+            refresh_all_sales(financial_key, app_id, launch_date, on_progress=_set_status("Fetching sales"), collector=self, game_state=gs, unreleased=unreleased)
 
-            totals = get_sales_totals(app_id)
-            total_units = totals[0]
-            net_revenue = totals[3]
-            save_sales_snapshot(app_id, totals[0], totals[1], totals[3])
-            gs.cached_sales_by_country = load_sales_by_country(app_id)
+            if unreleased:
+                total_units = 0
+                net_revenue = 0.0
+            else:
+                totals = get_sales_totals(app_id)
+                total_units = totals[0]
+                net_revenue = totals[3]
+                save_sales_snapshot(app_id, totals[0], totals[1], totals[3])
+                gs.cached_sales_by_country = load_sales_by_country(app_id)
 
             refresh_all_wishlists(financial_key, app_id, launch_date, on_progress=_set_status("Fetching wishlists"), collector=self, game_state=gs)
 
@@ -881,7 +905,7 @@ class DataCollector:
                     f"Total {total_reviews} (+{total_positive} -{total_negative})")
 
             # New sale
-            if gs.last_total_units > 0 and total_units > gs.last_total_units:
+            if not unreleased and gs.last_total_units > 0 and total_units > gs.last_total_units:
                 new_sales = total_units - gs.last_total_units
                 country_lines = ""
                 if gs.cached_sales_by_country:
@@ -1571,7 +1595,8 @@ input::placeholder {
           var gsEl = document.getElementById('gameStatus' + j);
           if (gr.success) {
             if (gsEl) { gsEl.className = 'game-status ok'; gsEl.textContent = '\\u2713'; }
-            lines.push('\\u2713 ' + gr.app_id + (gr.name ? ' (' + gr.name + ')' : ''));
+            var preTag = gr.coming_soon ? ' [Pre-Launch]' : '';
+            lines.push('\\u2713 ' + gr.app_id + (gr.name ? ' (' + gr.name + ')' : '') + preTag);
             if (gr.name && games[j]) games[j].name = gr.name;
           } else {
             allOk = false;
@@ -1817,6 +1842,15 @@ body {
   color: var(--green-bright); padding: 5px 14px; border-radius: var(--radius-sm);
   font-family: var(--font-mono); font-size: 13px; font-weight: 500;
 }
+.header-info .price-badge.prelaunch {
+  background: linear-gradient(135deg, rgba(102,192,244,0.15), rgba(40,90,140,0.1));
+  border-color: rgba(102,192,244,0.4);
+  color: var(--accent);
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+body.unreleased .sales-only { display: none !important; }
+body.unreleased .metrics-grid { grid-template-columns: repeat(auto-fit, minmax(220px, 320px)); }
+body.unreleased .country-grid { grid-template-columns: 1fr; }
 .header-controls {
   margin-left: auto; text-align: right; flex-shrink: 0;
   display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
@@ -2099,7 +2133,7 @@ body {
 
 <div class="warning-banner" id="warningBanner"></div>
 <div class="dashboard">
-  <div class="metrics-grid">
+  <div class="metrics-grid sales-only">
     <div class="metric-card">
       <div class="metric-label">Total Sales</div>
       <div class="metric-value gold loading" id="totalSales">--</div>
@@ -2122,12 +2156,12 @@ body {
     </div>
   </div>
   <div class="metrics-grid">
-    <div class="metric-card">
+    <div class="metric-card sales-only">
       <div class="metric-label">Reviews</div>
       <div class="metric-value loading" id="totalReviews">--</div>
       <div class="metric-sub" id="reviewRatio"></div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card sales-only">
       <div class="metric-label">Positive Rate</div>
       <div class="metric-value green loading" id="positiveRate">--</div>
       <div class="metric-sub" id="reviewScore"></div>
@@ -2137,14 +2171,14 @@ body {
       <div class="metric-value loading" id="wishlistNet">--</div>
       <div class="metric-sub" id="wishlistSub"></div>
     </div>
-    <div class="metric-card">
+    <div class="metric-card sales-only">
       <div class="metric-label">Refund Rate</div>
       <div class="metric-value loading" id="refundRate">--</div>
       <div class="metric-sub">returns / sales</div>
     </div>
   </div>
-  <div class="section-header"><h2>Sales Performance</h2></div>
-  <div id="cumChartsRow" class="charts-grid">
+  <div class="section-header sales-only"><h2>Sales Performance</h2></div>
+  <div id="cumChartsRow" class="charts-grid sales-only">
     <div class="chart-card">
       <h3 id="cumSalesTitle">Cumulative Sales &amp; Revenue</h3>
       <canvas id="salesTimelineChart" height="180"></canvas>
@@ -2154,7 +2188,7 @@ body {
       <canvas id="revenueTimelineChart" height="180"></canvas>
     </div>
   </div>
-  <div class="charts-row">
+  <div class="charts-row sales-only">
     <div class="chart-card">
       <h3>Daily Sales &amp; Revenue</h3>
       <canvas id="salesChart" height="220"></canvas>
@@ -2172,7 +2206,7 @@ body {
   </div>
   <div class="section-header"><h2>Geographic Breakdown</h2></div>
   <div class="country-grid">
-    <div class="country-card">
+    <div class="country-card sales-only">
       <h3>Sales by Country</h3>
       <div id="salesByCountry"></div>
     </div>
@@ -2181,8 +2215,8 @@ body {
       <div id="wishlistByCountry"></div>
     </div>
   </div>
-  <div class="section-header"><h2>Recent Reviews</h2></div>
-  <div class="reviews-grid" id="recentReviews"></div>
+  <div class="section-header sales-only"><h2>Recent Reviews</h2></div>
+  <div class="reviews-grid sales-only" id="recentReviews"></div>
 </div>
 
 <div class="status-bar">
@@ -2259,7 +2293,7 @@ body {
 
   var gameColors = [
     { border: '#66c0f4', fill: 'rgba(102,192,244,0.3)' },
-    { border: '#a4d007', fill: 'rgba(164,208,7,0.3)' },
+    { border: '#d667a3', fill: 'rgba(214,103,163,0.3)' },
     { border: '#c45a5a', fill: 'rgba(196,90,90,0.3)' },
     { border: '#c9a84c', fill: 'rgba(201,168,76,0.3)' },
     { border: '#7a5aaa', fill: 'rgba(122,90,170,0.3)' },
@@ -2555,29 +2589,46 @@ body {
       ? '/api/data-all'
       : '/api/data?app_id=' + encodeURIComponent(currentAppId);
     fetch(url).then(function(resp) { return resp.json(); }).then(function(data) {
+      // Toggle pre-launch (unreleased) layout
+      var unreleased = !isPortfolioMode && !!data.unreleased;
+      document.body.classList.toggle('unreleased', unreleased);
+      var priceEl = document.getElementById('gamePrice');
+
       // Header
       if (isPortfolioMode) {
         document.getElementById('gameName').textContent = 'All Games';
         document.getElementById('gameDev').textContent = allGames.length + ' games';
         document.getElementById('headerImg').src = '';
         document.getElementById('headerImg').style.display = 'none';
-        document.getElementById('gamePrice').textContent = '';
-        document.getElementById('gamePrice').style.display = 'none';
+        priceEl.textContent = '';
+        priceEl.classList.remove('prelaunch');
+        priceEl.style.display = 'none';
         document.getElementById('cumRevenueCard').style.display = '';
-        document.getElementById('cumChartsRow').className = 'charts-row';
+        document.getElementById('cumChartsRow').className = 'charts-row sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales';
       } else {
-        document.getElementById('headerImg').style.display = '';
-        document.getElementById('gamePrice').style.display = '';
+        priceEl.style.display = '';
         document.getElementById('cumRevenueCard').style.display = 'none';
-        document.getElementById('cumChartsRow').className = 'charts-grid';
+        document.getElementById('cumChartsRow').className = 'charts-grid sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales &amp; Revenue';
-        if (data.app_details) {
-          var d = data.app_details;
-          document.getElementById('gameName').textContent = d.name || '';
-          document.getElementById('gameDev').textContent = (d.developers || []).join(', ') + ' \u00B7 ' + (d.publishers || []).join(', ');
-          document.getElementById('headerImg').src = d.header_image || '';
-          if (d.price_overview) document.getElementById('gamePrice').textContent = d.price_overview.final_formatted || '';
+        var d = data.app_details || {};
+        var fallback = (allGames.find(function(g) { return g.app_id === currentAppId; }) || {});
+        document.getElementById('gameName').textContent = d.name || fallback.name || currentAppId;
+        document.getElementById('gameDev').textContent = !((d.developers||[]).length||(d.publishers||[]).length) ? '' : (d.developers || []).join(', ') + ' \u00B7 ' + (d.publishers || []).join(', ');
+        var headerImg = document.getElementById('headerImg');
+        if (d.header_image) {
+          headerImg.src = d.header_image;
+          headerImg.style.display = '';
+        } else {
+          headerImg.removeAttribute('src');
+          headerImg.style.display = 'none';
+        }
+        if (unreleased) {
+          priceEl.textContent = 'Pre-Launch';
+          priceEl.classList.add('prelaunch');
+        } else {
+          priceEl.classList.remove('prelaunch');
+          priceEl.textContent = (d.price_overview && d.price_overview.final_formatted) || '';
         }
       }
       document.querySelectorAll('.metric-value.loading').forEach(function(el) { el.classList.remove('loading'); });
@@ -2784,28 +2835,44 @@ class DashboardHandler(BaseHTTPRequestHandler):
             api_key_valid = False
             financial_key_valid = False
 
-            # Test each game with the regular API key
+            # Validate each game. Released games go through the player-count API
+            # (which also confirms the API key); unreleased games fall back to the
+            # public store API since player-count returns errors for them.
             for app_id in app_ids:
                 try:
                     player_data = fetch_json(
                         f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?key={api_key}&appid={app_id}",
                         "test_api"
                     )
-                    if player_data and "response" in player_data:
+                    player_ok = bool(player_data and "response" in player_data)
+                    if player_ok:
                         api_key_valid = True
-                        # Get game name from store API (public, no key needed)
-                        details = fetch_json(
-                            f"https://store.steampowered.com/api/appdetails?appids={app_id}",
-                            "test_details"
-                        )
-                        name = ""
-                        if details and str(app_id) in details and details[str(app_id)].get("success"):
-                            name = details[str(app_id)]["data"].get("name", "")
-                        results.append({"app_id": app_id, "name": name, "success": True})
+
+                    # Always check the store API to detect coming_soon and to validate unreleased games
+                    details = fetch_json(
+                        f"https://store.steampowered.com/api/appdetails?appids={app_id}",
+                        "test_details"
+                    )
+                    name = ""
+                    coming_soon = False
+                    store_ok = False
+                    if details and str(app_id) in details and details[str(app_id)].get("success"):
+                        d = details[str(app_id)]["data"]
+                        name = d.get("name", "")
+                        coming_soon = bool(d.get("release_date", {}).get("coming_soon"))
+                        store_ok = True
+
+                    if player_ok or (store_ok and coming_soon):
+                        results.append({"app_id": app_id, "name": name, "coming_soon": coming_soon, "success": True})
+                    elif store_ok:
+                        # Released per the store but player-count failed — likely an API key problem
+                        results.append({"app_id": app_id, "name": name, "coming_soon": coming_soon, "success": False,
+                                        "error": "API key invalid or app not accessible"})
                     else:
-                        results.append({"app_id": app_id, "name": "", "success": False, "error": "API key invalid or app not found"})
+                        results.append({"app_id": app_id, "name": "", "coming_soon": False, "success": False,
+                                        "error": "App not found on Steam"})
                 except Exception as e:
-                    results.append({"app_id": app_id, "name": "", "success": False, "error": str(e)})
+                    results.append({"app_id": app_id, "name": "", "coming_soon": False, "success": False, "error": str(e)})
 
             # Test financial key if provided
             if financial_key:
@@ -2843,6 +2910,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             collector = self.server.collector
             gs = collector.get_state(req_app_id)
 
+            # Lazily populate app_details on first view so a freshly-added game has a header
+            # before the next collector cycle runs.
+            if gs.cached_app_details is None:
+                gs.cached_app_details = get_app_details(req_app_id)
+
             p_history = get_player_history(req_app_id)
             daily = get_all_daily_sales(req_app_id)
             timeline = get_sales_snapshots(req_app_id)
@@ -2850,8 +2922,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             wl_history = get_wishlist_history(req_app_id)
 
             tg = settings.get('telegram', {})
+            game_cfg = next((g for g in games if str(g.get('app_id')) == req_app_id), {})
 
             payload = {
+                "unreleased": bool(game_cfg.get('unreleased', False)),
                 "current_players": gs.cached_players,
                 "peak_players": gs.peak_players,
                 "reviews": gs.cached_reviews,
@@ -3008,15 +3082,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._json_response({'success': False, 'error': 'Invalid JSON'}, 400)
                 return
 
-            # Auto-fetch game names and launch dates
+            # Auto-fetch game names, launch dates, and pre-launch status.
+            # Re-detect unreleased games every save so they flip to released on launch day.
             games = data.get('games', [])
+            today_str = datetime.now().strftime("%Y-%m-%d")
             for g in games:
-                if g.get('app_id') and (not g.get('name') or not g.get('launch_date')):
-                    name, launch_date = get_game_info_from_api(g['app_id'])
-                    if not g.get('name'):
-                        g['name'] = name
-                    if not g.get('launch_date') and launch_date:
+                if not g.get('app_id'):
+                    continue
+                missing_basics = not g.get('name') or not g.get('launch_date') or 'unreleased' not in g
+                recheck_prelaunch = bool(g.get('unreleased'))
+                if not missing_basics and not recheck_prelaunch:
+                    continue
+                name, launch_date, coming_soon = get_game_info_from_api(g['app_id'])
+                if not g.get('name'):
+                    g['name'] = name
+                g['unreleased'] = coming_soon
+                if coming_soon:
+                    # Use today as placeholder; find_earliest_wishlist_date resolves real horizon via app_min_date
+                    if not g.get('launch_date'):
+                        g['launch_date'] = today_str
+                else:
+                    if launch_date:
+                        # Released: prefer the real release date so sales backfill starts from the right day
                         g['launch_date'] = launch_date
+                    elif not g.get('launch_date'):
+                        g['launch_date'] = today_str
 
             data['games'] = games
             save_all_settings(data)
