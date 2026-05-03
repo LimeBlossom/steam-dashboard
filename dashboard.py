@@ -2198,10 +2198,14 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       <canvas id="playerChart" height="220"></canvas>
     </div>
   </div>
-  <div class="charts-grid">
+  <div id="wishlistChartsRow" class="charts-grid">
     <div class="chart-card">
       <h3>Wishlist Activity</h3>
       <canvas id="wishlistChart" height="180"></canvas>
+    </div>
+    <div class="chart-card" id="wishlistStackedCard" style="display:none;">
+      <h3>Cumulative Wishlists by Game</h3>
+      <canvas id="wishlistStackedChart" height="180"></canvas>
     </div>
   </div>
   <div class="section-header"><h2>Geographic Breakdown</h2></div>
@@ -2232,7 +2236,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
   var rootEl = document.documentElement;
   rootEl.setAttribute('data-theme', '{{THEME}}');
 
-  var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart;
+  var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart, wishlistStackedChart;
   var currentAppId = localStorage.getItem('selectedGame') || '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
   var isPortfolioMode = (currentAppId === '__all__');
@@ -2308,6 +2312,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     if (salesChart) salesChart.destroy();
     if (playerChart) playerChart.destroy();
     if (wishlistChart) wishlistChart.destroy();
+    if (wishlistStackedChart) wishlistStackedChart.destroy();
     initCharts();
   }
 
@@ -2457,6 +2462,23 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         }
       })
     });
+
+    if (isPortfolioMode) {
+      // Stacked cumulative wishlists by game
+      wishlistStackedChart = new Chart(document.getElementById('wishlistStackedChart'), {
+        type: 'line',
+        data: { labels: [], datasets: [] },
+        options: Object.assign({}, baseOpts, {
+          plugins: { legend: legendCfg, tooltip: baseTooltip },
+          scales: {
+            x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
+            y: Object.assign({}, baseScaleY, { stacked: true })
+          }
+        })
+      });
+    } else {
+      wishlistStackedChart = null;
+    }
   }
 
   function updatePortfolioCharts(data) {
@@ -2582,6 +2604,42 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     playerChart.data.labels = playerLabels;
     playerChart.data.datasets = playerDatasets;
     playerChart.update('none');
+
+    // Cumulative wishlists by game (stacked area)
+    if (wishlistStackedChart) {
+      var allWlDates = {};
+      gameIds.forEach(function(id) {
+        (perGame[id].daily_wishlists || []).forEach(function(r) { allWlDates[r[0]] = true; });
+      });
+      var sortedWlDates = Object.keys(allWlDates).sort();
+
+      var wlDatasets = [];
+      gameIds.forEach(function(id, idx) {
+        var color = gameColors[idx % gameColors.length];
+        var byDate = {};
+        (perGame[id].daily_wishlists || []).forEach(function(r) { byDate[r[0]] = r; });
+
+        var cumNet = 0;
+        var netArr = [];
+        sortedWlDates.forEach(function(date) {
+          var row = byDate[date];
+          if (row) cumNet += row[1] - row[2] - row[3];
+          netArr.push(cumNet);
+        });
+
+        wlDatasets.push({
+          label: perGame[id].name,
+          data: netArr, borderColor: color.border, backgroundColor: color.fill,
+          fill: true, tension: 0.35, pointRadius: 0,
+          pointHoverRadius: isMobile ? 2 : 4, pointBackgroundColor: color.border,
+          pointBorderColor: 'transparent', borderWidth: 2
+        });
+      });
+
+      wishlistStackedChart.data.labels = sortedWlDates;
+      wishlistStackedChart.data.datasets = wlDatasets;
+      wishlistStackedChart.update('none');
+    }
   }
 
   function fetchData() {
@@ -2606,11 +2664,15 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         document.getElementById('cumRevenueCard').style.display = '';
         document.getElementById('cumChartsRow').className = 'charts-row sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales';
+        document.getElementById('wishlistStackedCard').style.display = '';
+        document.getElementById('wishlistChartsRow').className = 'charts-row';
       } else {
         priceEl.style.display = '';
         document.getElementById('cumRevenueCard').style.display = 'none';
         document.getElementById('cumChartsRow').className = 'charts-grid sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales &amp; Revenue';
+        document.getElementById('wishlistStackedCard').style.display = 'none';
+        document.getElementById('wishlistChartsRow').className = 'charts-grid';
         var d = data.app_details || {};
         var fallback = (allGames.find(function(g) { return g.app_id === currentAppId; }) || {});
         document.getElementById('gameName').textContent = d.name || fallback.name || currentAppId;
