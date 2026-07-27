@@ -39,6 +39,17 @@ python3 dashboard.py
 
 That's it. No `requirements.txt`, no `.env` files, no database setup.
 
+### One-click launchers
+
+Instead of typing the command each time:
+
+- **Windows:** double-click `start-dashboard.bat`
+- **Linux / macOS / Git Bash:** `./start-dashboard.sh`
+
+Both find Python automatically, read the configured port from the database (default 8081),
+open the dashboard in your browser, and stream the server log in the window. Close the
+window or press Ctrl+C to stop. Pass `--no-browser` to skip the browser step.
+
 ## Getting Your API Keys
 
 The setup wizard will ask for two keys. Here's where to find them.
