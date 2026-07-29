@@ -20,6 +20,7 @@ from urllib.error import HTTPError
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse, parse_qs, quote
 from datetime import datetime, timedelta
+from html.parser import HTMLParser
 
 VERSION = "1.0"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -316,6 +317,35 @@ def fetch_json(url, label="api"):
         return None
 
 
+def fetch_html(url, label="html"):
+    # Uses a browser User-Agent unlike fetch_json — required to bypass Steam's bot detection on community pages
+    global _api_fail_counts
+    _rate_limiter.wait()
+    try:
+        req = Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; SteamDashboard/1.0)"})
+        with urlopen(req, timeout=15) as resp:
+            html = resp.read().decode('utf-8', errors='replace')
+        _api_fail_counts[label] = 0
+        return html
+    except HTTPError as e:
+        if e.code == 429:
+            print(f"  [THROTTLED] {label}: HTTP 429 - rate limited by Steam")
+            return None
+        count = _api_fail_counts.get(label, 0) + 1
+        _api_fail_counts[label] = count
+        wait = min(2 ** count, 60)
+        print(f"  [ERROR] {label}: {e} (backoff {wait}s)")
+        time.sleep(wait)
+        return None
+    except Exception as e:
+        count = _api_fail_counts.get(label, 0) + 1
+        _api_fail_counts[label] = count
+        wait = min(2 ** count, 60)
+        print(f"  [ERROR] {label}: {e} (backoff {wait}s)")
+        time.sleep(wait)
+        return None
+
+
 # ========== STEAM API ==========
 
 def get_current_players(api_key, app_id):
@@ -373,6 +403,183 @@ def get_recent_reviews(app_id):
     if data and data.get("success") == 1:
         return data.get("reviews", [])
     return []
+
+
+class _DiscussionListParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.topics = []
+        self._t = None
+        self._cap = None
+        self._div_depth = 0
+        self._cap_div_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        cls = set(a.get('class', '').split())
+        if tag == 'div':
+            self._div_depth += 1
+        if tag == 'div' and 'forum_topic' in cls and 'data-gidforumtopic' in a:
+            self._t = {'id': a['data-gidforumtopic'], 'title': '', 'author': '',
+                       'reply_count': 0, 'last_post_time': 0, 'url': ''}
+            self.topics.append(self._t)
+        if not self._t:
+            return
+        if tag == 'a' and 'forum_topic_overlay' in cls:
+            self._t['url'] = a.get('href', '')
+        elif tag == 'div' and self._cap is None:
+            if 'forum_topic_name' in cls:
+                self._cap = 'title'
+                self._cap_div_depth = self._div_depth
+            elif 'forum_topic_op' in cls:
+                self._cap = 'author'
+                self._cap_div_depth = self._div_depth
+            elif 'forum_topic_reply_count' in cls:
+                self._cap = 'reply_count'
+                self._cap_div_depth = self._div_depth
+            elif 'forum_topic_lastpost' in cls and 'data-timestamp' in a:
+                try:
+                    self._t['last_post_time'] = int(a['data-timestamp'])
+                except ValueError:
+                    pass
+
+    def handle_endtag(self, tag):
+        if tag == 'div':
+            if self._cap and self._div_depth == self._cap_div_depth:
+                self._cap = None
+            self._div_depth -= 1
+
+    def handle_data(self, data):
+        data = data.strip()
+        if data and self._cap and self._t:
+            if self._cap == 'reply_count':
+                try:
+                    self._t['reply_count'] = int(data.replace(',', ''))
+                except ValueError:
+                    pass
+            elif not self._t[self._cap]:
+                self._t[self._cap] = data
+
+
+class _DiscussionDetailParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.op_text = ''
+        self.op_time = 0
+        self.latest_reply = None
+        self._in_op = False
+        self._op_div_depth = 0
+        self._in_op_content = False
+        self._content_div_depth = 0
+        self._cap_reply_text = False
+        self._reply_text_div_depth = 0
+        self._in_bdi = False
+        self._last_bdi = ''
+        self._cur_reply_time = 0
+        self._cur_reply_text = ''
+        self._div_depth = 0
+
+    def handle_starttag(self, tag, attrs):
+        a = dict(attrs)
+        cls = set(a.get('class', '').split())
+        if tag == 'div':
+            self._div_depth += 1
+        if tag == 'div' and 'forum_op' in cls:
+            self._in_op = True
+            self._op_div_depth = self._div_depth
+        if self._in_op:
+            if tag == 'div' and 'content' in cls and not self._in_op_content:
+                self._in_op_content = True
+                self._content_div_depth = self._div_depth
+            if tag == 'div' and 'commentthread_comment_timestamp' in cls and 'data-timestamp' in a:
+                try:
+                    self.op_time = int(a['data-timestamp'])
+                except ValueError:
+                    pass
+        if not self._in_op:
+            if tag == 'div' and 'commentthread_comment_timestamp' in cls and 'data-timestamp' in a:
+                try:
+                    self._cur_reply_time = int(a['data-timestamp'])
+                except ValueError:
+                    pass
+            if tag == 'div' and 'commentthread_comment_text' in cls:
+                self._cap_reply_text = True
+                self._reply_text_div_depth = self._div_depth
+                self._cur_reply_text = ''
+        if tag == 'bdi':
+            self._in_bdi = True
+
+    def handle_endtag(self, tag):
+        if tag == 'div':
+            if self._in_op_content and self._div_depth == self._content_div_depth:
+                self._in_op_content = False
+            if self._in_op and self._div_depth == self._op_div_depth:
+                self._in_op = False
+                self._in_op_content = False
+            if self._cap_reply_text and self._div_depth == self._reply_text_div_depth:
+                self._cap_reply_text = False
+                if self._cur_reply_text:
+                    self.latest_reply = {
+                        'author': self._last_bdi,
+                        'time': self._cur_reply_time,
+                        'text': self._cur_reply_text,
+                    }
+            self._div_depth -= 1
+        if tag == 'bdi':
+            self._in_bdi = False
+
+    def handle_data(self, data):
+        data = data.strip()
+        if not data:
+            return
+        if self._in_op_content and not self.op_text:
+            self.op_text = data[:300]
+        if self._cap_reply_text and not self._cur_reply_text:
+            self._cur_reply_text = data[:300]
+        if self._in_bdi:
+            self._last_bdi = data
+
+
+def get_community_discussions(app_id, count=5):
+    app_id = str(app_id)
+    list_html = fetch_html(
+        f"https://steamcommunity.com/app/{app_id}/discussions/",
+        f"discussions_list_{app_id}"
+    )
+    if list_html is None:
+        return None
+    lp = _DiscussionListParser()
+    lp.feed(list_html)
+    topics = lp.topics[:count]
+    result = []
+    for t in topics:
+        raw_url = t['url']
+        if not raw_url:
+            url = f"https://steamcommunity.com/app/{app_id}/discussions/0/{t['id']}/"
+        elif not raw_url.startswith('http'):
+            url = f"https://steamcommunity.com{raw_url}"
+        else:
+            url = raw_url
+        detail_html = fetch_html(url, f"discussions_detail_{t['id']}")
+        if detail_html is None:
+            continue
+        dp = _DiscussionDetailParser()
+        dp.feed(detail_html)
+        result.append({
+            "id": t['id'],
+            "title": t['title'],
+            "url": url,
+            "author": t['author'],
+            "posted_at": dp.op_time or t['last_post_time'],
+            "reply_count": t['reply_count'],
+            "opening_snippet": dp.op_text,
+            "latest_reply": {
+                "author": dp.latest_reply['author'],
+                "posted_at": dp.latest_reply['time'],
+                "snippet": dp.latest_reply['text'],
+            } if dp.latest_reply else None,
+        })
+    return result
 
 
 # ========== FINANCIAL API ==========
@@ -776,6 +983,8 @@ class GameState:
         self.cached_wishlist = load_wishlist_totals(app_id)
         self.cached_sales_by_country = load_sales_by_country(app_id)
         self.cached_wishlist_by_country = load_wishlists_by_country(app_id)
+        self.cached_discussions = []
+        self.discussions_last_fetched = 0.0
 
 
 class DataCollector:
@@ -820,7 +1029,7 @@ class DataCollector:
             gs = self.get_state(app_id)
 
             # Players + Reviews
-            players = get_current_players(api_key, app_id)
+            players = 0 if unreleased else get_current_players(api_key, app_id)
             reviews = get_reviews(app_id)
             recent_reviews = get_recent_reviews(app_id)
             save_player_count(app_id, players)
@@ -866,6 +1075,15 @@ class DataCollector:
             save_wishlist_snapshot(app_id, gs.cached_wishlist["adds"],
                                    gs.cached_wishlist["deletes"],
                                    gs.cached_wishlist["purchases"], wl_net)
+
+            if time.time() - gs.discussions_last_fetched > 1800:
+                self.status = f"{game_name}: Fetching discussions"
+                discussions = get_community_discussions(app_id)
+                self.status = ""
+                print(f"  [{game_name}] Discussions: {len(discussions) if discussions is not None else 'None (fetch failed)'}")
+                if discussions is not None:
+                    gs.cached_discussions = discussions
+                    gs.discussions_last_fetched = time.time()
 
             # Telegram alerts (skip on first collection)
             if self.is_first_collection:
@@ -2021,6 +2239,39 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
   mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
 }
 
+.discussions-grid { display: grid; grid-template-columns: 1fr; gap: 10px; }
+.discussion-card {
+  background: var(--bg-mid);
+  border: 1px solid var(--border-color); border-radius: var(--radius-md);
+  padding: 18px 22px;
+  transition: border-color 0.3s var(--ease-out), transform 0.2s var(--ease-out);
+}
+.discussion-card:hover { border-color: var(--border-light); transform: translateY(-1px); }
+.discussion-header {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 10px; margin-bottom: 6px;
+}
+.discussion-title {
+  color: var(--text-secondary); text-decoration: none;
+  font-weight: 600; font-size: 13.5px; line-height: 1.4;
+}
+.discussion-title:hover { color: var(--accent); text-decoration: underline; }
+.discussion-replies {
+  font-size: 11px; font-family: var(--font-mono); color: var(--text-tertiary);
+  white-space: nowrap; flex-shrink: 0; padding-top: 2px;
+}
+.discussion-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.discussion-reply {
+  background: var(--bg-deep);
+  border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+  padding: 10px 14px; margin-top: 12px;
+}
+.discussion-reply-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.discussion-reply-label {
+  font-size: 10px; font-family: var(--font-mono); color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px;
+}
+
 .warning-banner {
   display: none;
   background: rgba(232,167,53,0.15);
@@ -2059,7 +2310,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
   -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
 }
 
-.metric-card, .chart-card, .country-card, .review-card { animation: fadeUp 0.5s var(--ease-out) both; }
+.metric-card, .chart-card, .country-card, .review-card, .discussion-card { animation: fadeUp 0.5s var(--ease-out) both; }
 @keyframes fadeUp {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
@@ -2221,6 +2472,8 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
   </div>
   <div class="section-header sales-only"><h2>Recent Reviews</h2></div>
   <div class="reviews-grid sales-only" id="recentReviews"></div>
+  <div class="section-header" id="discussionsSectionHeader"><h2>Recent Discussions</h2></div>
+  <div class="discussions-grid" id="recentDiscussions"></div>
 </div>
 
 <div class="status-bar">
@@ -2802,6 +3055,49 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         return '<div class="review-card"><div class="review-header"><span class="review-thumb ' + thumbClass + '">' + thumb + '</span>' + gameTag + '<span class="review-author">' + esc(r.author && r.author.personaname || 'Anonymous') + '</span><span class="review-playtime">' + reviewDate + playtime + 'h' + '</span></div><div class="review-text">' + text + '</div></div>';
       }).join('');
 
+      var discussions = data.discussions || [];
+      var discHeader = document.getElementById('discussionsSectionHeader');
+      var discGrid = document.getElementById('recentDiscussions');
+      if (discGrid) {
+        discGrid.innerHTML = discussions.length ? discussions.map(function(d) {
+          var postedDate = d.posted_at
+            ? new Date(d.posted_at * 1000).toLocaleDateString(undefined, {year:'numeric',month:'long',day:'numeric'})
+            : '';
+          var replyLabel = d.reply_count === 1 ? '1 reply' : (d.reply_count + ' replies');
+          var gameTag = (isPortfolioMode && d.game_name)
+            ? '<span class="review-game">' + esc(d.game_name) + '</span>' : '';
+          var snippet = esc((d.opening_snippet || '').substring(0, 300)).split(String.fromCharCode(10)).join(' ');
+          var replyHtml = '';
+          if (d.latest_reply) {
+            var rDate = d.latest_reply.posted_at
+              ? new Date(d.latest_reply.posted_at * 1000).toLocaleDateString(undefined, {year:'numeric',month:'long',day:'numeric'})
+              : '';
+            var rSnippet = esc((d.latest_reply.snippet || '').substring(0, 300)).split(String.fromCharCode(10)).join(' ');
+            replyHtml = '<div class="discussion-reply">'
+              + '<div class="discussion-reply-label">Latest reply</div>'
+              + '<div class="discussion-reply-header">'
+              + '<span class="review-author">' + esc(d.latest_reply.author) + '</span>'
+              + '<span class="review-playtime">' + rDate + '</span>'
+              + '</div>'
+              + '<div class="review-text">' + rSnippet + '</div>'
+              + '</div>';
+          }
+          return '<div class="discussion-card" data-id="' + esc(d.id) + '">'
+            + '<div class="discussion-header">'
+            + '<span>' + gameTag + '<a href="' + esc(d.url) + '" target="_blank" class="discussion-title">' + esc(d.title) + '</a></span>'
+            + '<span class="discussion-replies">' + replyLabel + '</span>'
+            + '</div>'
+            + '<div class="discussion-meta">'
+            + '<span class="review-author">' + esc(d.author) + '</span>'
+            + '<span class="review-playtime">' + postedDate + '</span>'
+            + '</div>'
+            + '<div class="review-text">' + snippet + '</div>'
+            + replyHtml
+            + '</div>';
+        }).join('')
+          : '<div style="color:var(--text-tertiary);font-style:italic;padding:12px 0;">No discussions yet.</div>';
+      }
+
       document.getElementById('tgDot').className = 'dot ' + (data.telegram_active ? 'on' : 'off');
       document.getElementById('tgStatus').textContent = data.telegram_active ? 'ON' : 'OFF';
       document.getElementById('collectorStatus').textContent = data.collector_status || '';
@@ -3008,6 +3304,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
                 "collector_status": collector.status,
                 "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
+                "discussions": gs.cached_discussions,
                 "timestamp": datetime.now().isoformat()
             }
             self._json_response(payload)
@@ -3035,6 +3332,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             total_peak = 0
             per_game = {}
             all_recent_reviews = []
+            all_discussions = []
             merged_sales_by_country = {}
             merged_wl_by_country = {}
 
@@ -3075,6 +3373,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     r["game_name"] = game_name
                 all_recent_reviews.extend(recent)
 
+                # Discussions with game name tagged
+                for d in gs.cached_discussions:
+                    d = dict(d)  # copy to avoid mutating cached state
+                    d["game_name"] = game_name
+                    all_discussions.append(d)
+
                 # Merge sales by country
                 for country, data in gs.cached_sales_by_country.items():
                     if country not in merged_sales_by_country:
@@ -3105,6 +3409,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             all_recent_reviews.sort(key=lambda r: r.get("timestamp_created", 0), reverse=True)
             all_recent_reviews = all_recent_reviews[:20]
 
+            # Sort discussions by posted_at, limit to 20
+            all_discussions.sort(key=lambda d: d.get("posted_at", 0), reverse=True)
+            all_discussions = all_discussions[:20]
+
             # Sort country dicts by primary value descending
             merged_sales_by_country = dict(sorted(merged_sales_by_country.items(), key=lambda x: x[1].get("units", 0), reverse=True))
             merged_wl_by_country = dict(sorted(merged_wl_by_country.items(), key=lambda x: x[1].get("adds", 0), reverse=True))
@@ -3122,6 +3430,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "sales_by_country": merged_sales_by_country,
                 "wishlist_by_country": merged_wl_by_country,
                 "recent_reviews": all_recent_reviews,
+                "discussions": all_discussions,
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
                 "collector_status": collector.status,
                 "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
