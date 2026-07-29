@@ -165,9 +165,15 @@ No studio keys are present on this endpoint.
 
 ### Metric card
 
-A fifth card is added to the second metrics grid. `.metrics-grid` changes from `grid-template-columns: repeat(4, 1fr)` to `repeat(auto-fit, minmax(200px, 1fr))` so five cards flow evenly. The existing `nth-child` animation-delay rules cover children 1 through 4 only; a fifth rule is added to each of the two grids to keep the stagger consistent.
+A fifth card is added to the second metrics grid, **inserted directly after Wishlists** rather than appended at the end, so the two demand-side metrics sit side by side:
 
-The card is **not** marked `sales-only`, so unreleased games show Wishlists and Followers rather than Wishlists alone. This is the pre-launch case that matters most, and it is verified to work: the unreleased title returns a real count.
+```
+Reviews | Positive Rate | Wishlists | Followers | Refund Rate
+```
+
+`.metrics-grid` changes from `grid-template-columns: repeat(4, 1fr)` to `repeat(auto-fit, minmax(200px, 1fr))` so five cards flow evenly. The existing `nth-child` animation-delay rules cover children 1 through 4 only; a fifth rule is added to each of the two grids to keep the stagger consistent. Because those rules are positional, inserting mid-row shifts Refund Rate's delay by one step, which is the desired left-to-right cascade and needs no special handling.
+
+The card is **not** marked `sales-only`. Reviews, Positive Rate, and Refund Rate all are, so on an unreleased game the row collapses to exactly Wishlists and Followers, adjacent — the pre-launch pairing that matters most, and verified to work since the unreleased title returns a real count.
 
 Element ids: `followersCard`, `followersLabel`, `followerCount`, `followerSub`.
 
@@ -175,10 +181,10 @@ The card is reused across views with a swapped label, the way the existing code 
 
 | View | Label | Value | Sub-line |
 |---|---|---|---|
-| Per-game | `Followers` | game followers | weekly change, e.g. `+3 this week` |
+| Per-game | `Followers` | game followers | none |
 | All Games | `Studio Followers` | studio followers | studio name |
 
-The weekly change is the current count minus the count from the row dated 7 days ago. When no row exists for that date, the oldest available row is used instead. With fewer than two rows in total there is nothing to compare, so the sub-line is left blank rather than showing `+0`.
+The per-game card shows the count and nothing else. No delta: the existing `playerChange` delta is poll-over-poll, and a second delta on a different time window would introduce a competing convention on a card whose whole content is one scalar. Trend lives in the chart directly below.
 
 No summed figure appears on the All Games card. A consequence, accepted deliberately: on the All Games tab per-game follower counts are visible only in the chart, not as a number.
 
