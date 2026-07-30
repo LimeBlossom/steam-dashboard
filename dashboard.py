@@ -2485,7 +2485,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
 
 .charts-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
 .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
-.charts-grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 12px; }
+.chart-span-full { grid-column: 1 / -1; }
 .chart-card {
   position: relative;
   background: var(--bg-mid);
@@ -2792,7 +2792,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       <canvas id="playerChart" height="220"></canvas>
     </div>
   </div>
-  <div id="wishlistChartsRow" class="charts-grid">
+  <div id="wishlistChartsRow" class="charts-row">
     <div class="chart-card">
       <h3>Wishlist Activity</h3>
       <canvas id="wishlistChart" height="180"></canvas>
@@ -2801,7 +2801,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       <h3>Cumulative Wishlists by Game</h3>
       <canvas id="wishlistStackedChart" height="180"></canvas>
     </div>
-    <div class="chart-card">
+    <div class="chart-card" id="followerChartCard">
       <h3>Follower Growth</h3>
       <canvas id="followerChart" height="180"></canvas>
     </div>
@@ -3318,6 +3318,14 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       // Toggle pre-launch (unreleased) layout
       var unreleased = !isPortfolioMode && !!data.unreleased;
       document.body.classList.toggle('unreleased', unreleased);
+
+      // On All Games the wishlist row already holds two charts, so a third
+      // across is too cramped for a multi-line follower series. Give it the
+      // full width of its own line there. On a single game the stacked
+      // wishlist card is hidden, so it pairs with Wishlist Activity instead.
+      document.getElementById('followerChartCard')
+              .classList.toggle('chart-span-full', isPortfolioMode);
+
       var priceEl = document.getElementById('gamePrice');
 
       // Header
@@ -3333,14 +3341,12 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         document.getElementById('cumChartsRow').className = 'charts-row sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales';
         document.getElementById('wishlistStackedCard').style.display = '';
-        document.getElementById('wishlistChartsRow').className = 'charts-grid-3';
       } else {
         priceEl.style.display = '';
         document.getElementById('cumRevenueCard').style.display = 'none';
         document.getElementById('cumChartsRow').className = 'charts-grid sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales &amp; Revenue';
         document.getElementById('wishlistStackedCard').style.display = 'none';
-        document.getElementById('wishlistChartsRow').className = 'charts-row';
         var d = data.app_details || {};
         var fallback = (allGames.find(function(g) { return g.app_id === currentAppId; }) || {});
         document.getElementById('gameName').textContent = d.name || fallback.name || currentAppId;
