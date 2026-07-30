@@ -2895,6 +2895,26 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     };
   }
 
+  // Every calendar day between two dates, inclusive.
+  //
+  // Chart.js category axes space labels evenly, so listing only the dates that
+  // have readings would draw a multi-week gap as a single step and make the
+  // line look near-vertical. Follower history has exactly that shape: an
+  // imported series ends weeks before local collection begins. Emitting every
+  // day keeps the spacing proportional, so a gap reads as the long slow span it
+  // actually was. Uses UTC arithmetic so a DST boundary cannot skip a day.
+  function dailyRange(first, last) {
+    var out = [];
+    var d = new Date(first + 'T00:00:00Z');
+    var end = new Date(last + 'T00:00:00Z');
+    if (isNaN(d) || isNaN(end)) return out;
+    while (d <= end) {
+      out.push(d.toISOString().slice(0, 10));
+      d.setUTCDate(d.getUTCDate() + 1);
+    }
+    return out;
+  }
+
   var gameColors = [
     { border: '#66c0f4', fill: 'rgba(102,192,244,0.3)' },
     { border: '#d667a3', fill: 'rgba(214,103,163,0.3)' },
@@ -3267,7 +3287,10 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         (perGame[id].follower_history || []).forEach(function(r) { allFDates[r[0]] = true; });
       });
       studioFh.forEach(function(r) { allFDates[r[0]] = true; });
-      var sortedFDates = Object.keys(allFDates).sort();
+      var presentFDates = Object.keys(allFDates).sort();
+      var sortedFDates = presentFDates.length
+        ? dailyRange(presentFDates[0], presentFDates[presentFDates.length - 1])
+        : [];
 
       var fDatasets = [];
 
@@ -3458,10 +3481,16 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         var fcc = getChartColors();
         var isMobile = window.innerWidth <= 768;
         var fh = data.follower_history || [];
-        followerChart.data.labels = fh.map(function(r) { return r[0]; });
+        var fByDate = {};
+        fh.forEach(function(r) { fByDate[r[0]] = r[1]; });
+        var fLabels = fh.length ? dailyRange(fh[0][0], fh[fh.length - 1][0]) : [];
+        followerChart.data.labels = fLabels;
         followerChart.data.datasets = [{
           label: 'Followers',
-          data: fh.map(function(r) { return r[1]; }),
+          data: fLabels.map(function(d) {
+            return fByDate[d] === undefined ? null : fByDate[d];
+          }),
+          spanGaps: true,
           borderColor: fcc.gold, backgroundColor: 'transparent',
           borderWidth: 2, tension: 0.35,
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
