@@ -67,6 +67,7 @@ One row per game per day, roughly 1.5k rows per game per year. Each poll overwri
 ```python
 STUDIO_APP_ID = '__studio__'
 FOLLOWER_FETCH_INTERVAL = 1800   # seconds
+FOLLOWER_RETRY_INTERVAL = 300    # seconds; back off a failing page
 ```
 
 ### Data helpers
@@ -74,8 +75,9 @@ FOLLOWER_FETCH_INTERVAL = 1800   # seconds
 Placed with the other per-game helpers:
 
 - `save_follower_count(app_id, count)` — `INSERT OR REPLACE` using today's date.
+- `record_follower_count(app_id, count)` — writes nothing and returns `False` when `count` is `None`; writes a genuine `0`. This is the single guard that a failed fetch never persists a value.
 - `get_follower_history(app_id)` — `[(date, count)]` ordered by date ascending.
-- `get_latest_follower_count(app_id)` — most recent stored count, or `0` if none.
+- `get_latest_follower_count(app_id)` — most recent stored count, or **`None`** if no reading has ever succeeded. `None` and `0` are different facts and the UI must render them differently.
 
 ### Scrapers
 
@@ -92,48 +94,31 @@ Followers move a few times a week, so scraping them on every 300-second poll is 
 
 New state on `GameState`:
 
-- `cached_followers` — seeded from `get_latest_follower_count(app_id)` in `__init__`, the way `cached_wishlist` already loads from the database, so a restart shows the real number instead of `--` for up to half an hour.
-- `followers_last_fetched` — float, `0.0` initially.
-- `last_follower_count` — seeded from the same stored value, for alert comparison.
+- `cached_followers` — seeded from `get_latest_follower_count(app_id)` in `__init__`, the way `cached_wishlist` already loads from the database, so a restart shows the real number instead of `--` for up to half an hour. May be `None` when no reading has ever succeeded.
+- `followers_next_fetch` — float absolute timestamp, `0.0` initially, meaning due immediately. A success schedules `now + FOLLOWER_FETCH_INTERVAL`; a failure schedules `now + FOLLOWER_RETRY_INTERVAL`.
+
+A failure must still advance this timestamp. `fetch_html` sleeps up to 60 seconds in-thread on failure, so leaving the timestamp unstamped would retry a permanently failing page on every 300-second poll and block sales and wishlist collection behind that sleep.
 
 New state on `DataCollector`, seeded in `__init__` from `get_latest_follower_count(STUDIO_APP_ID)`:
 
 - `cached_studio_followers`
-- `studio_followers_last_fetched`
-- `last_studio_followers`
+- `studio_followers_next_fetch`
 
-In `collect()`, inside the per-game loop, after the discussions block: if the throttle has elapsed, set `self.status` to `f"{game_name}: Fetching followers"`, call `get_game_followers(app_id)`, and on a non-`None` result save it, update `cached_followers`, and stamp `followers_last_fetched`. On `None`, leave the cached value and the timestamp alone so the next cycle retries.
+In `collect()`, inside the per-game loop, after the discussions block: if `time.time() >= gs.followers_next_fetch`, set `self.status` to `f"{game_name}: Fetching followers"`, call `get_game_followers(app_id)`, and pass the result to `record_follower_count`. On a write, update `cached_followers` and schedule the full interval. On `None`, leave the cached value alone and schedule the shorter retry.
 
 The studio is fetched **once per cycle, outside the per-game loop**, only when `studio.url` is non-empty, under the same throttle, writing to `STUDIO_APP_ID`.
 
 ## Alerts
 
-Telegram alerts fire on any change in either direction, with no threshold. At single-digit weekly growth, any threshold above 1 would fire almost never.
+**No Telegram alerting. Removed by decision after implementation.**
 
-`last_follower_count` and `last_studio_followers` are updated on **every** successful fetch, including the suppressed first one, so the first real alert compares against the day-one reading rather than zero.
+Alerts were originally specified to fire on any change in either direction, guarded only by `is_first_collection`. The whole-branch review found that guard unsound: `is_first_collection` is scoped to the process lifetime, but configuration is not. Saving settings does not restart the process, so configuring a studio URL or adding a game to a running install left the baseline at zero with the flag already cleared, and the next cycle would report a fabricated `0 → 20 (+20)`. The same happened when the first fetch failed and recorded no baseline.
 
-Alerts are guarded only by `is_first_collection` and by the fetch having succeeded. This deliberately omits the `last_value > 0` guard that the wishlist alert uses: warm-starting from the database plus the `is_first_collection` suppression already prevents cold-start spam, and the `> 0` guard would swallow the genuinely interesting 0 to 1 transition for a newly added game. The `is_first_collection` suppression also means a restart will not replay changes that happened while the process was down.
+The user did not want follower alerting, so it was removed rather than guarded. That dissolved the defect and deleted the `last_follower_count` / `last_studio_followers` bookkeeping which existed only to serve it.
 
-Per-game, using the existing `prefix` convention (`[Game Name] ` only when more than one game is configured):
+The wishlist, player-spike, new-review and new-sale alerts are unaffected.
 
-```
-👥 <b>{prefix}New follower{s}!</b>
-━━━━━━━━━━━━
-  44 → 45  (+1)
-```
-
-On a decrease, the heading becomes `Follower{s} lost` and the delta is negative.
-
-Studio, with no prefix since it is not game-scoped:
-
-```
-🏢 <b>Studio followers up!</b>
-━━━━━━━━━━━━
-  Lime Blossom Studio
-  20 → 21  (+1)
-```
-
-`down` on a decrease. When `studio.name` is empty, omit the name line.
+If follower alerting is ever wanted, the baseline must be `None` when no reading exists, and an alert must be skipped against a `None` baseline. A process-lifetime flag is not sufficient on its own.
 
 ## Settings
 
@@ -188,7 +173,15 @@ The per-game card shows the count and nothing else. No delta: the existing `play
 
 No summed figure appears on the All Games card. A consequence, accepted deliberately: on the All Games tab per-game follower counts are visible only in the chart, not as a number.
 
-When the All Games view has no studio URL configured, the card is hidden.
+There are **three distinct states**, and the card must render each differently:
+
+| State | Renders |
+|---|---|
+| Studio URL not configured (All Games only) | card hidden |
+| Configured or tracked, but no reading has ever succeeded | `--` |
+| A genuine reading of zero | `0` |
+
+The middle case is why `get_latest_follower_count` returns `None` rather than `0`. A `|| 0` fallback in the render path collapses the second and third states, so a game whose members page is unreachable would display `Followers 0` indefinitely, indistinguishable from a real zero. Both render sites must test explicitly for `null` and `undefined`.
 
 ### Chart
 

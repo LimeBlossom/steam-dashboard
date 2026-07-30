@@ -4,6 +4,24 @@
 
 **Goal:** Track Steam follower counts daily for each configured game and for the studio, showing per-game counts on each game tab and studio counts on the All Games tab.
 
+> **Post-implementation amendments.** This plan was executed and then amended to match
+> what shipped. Read these before treating any task below as authoritative:
+>
+> - **Task 6 (Telegram alerts) was REMOVED after implementation** and is no longer part of
+>   the feature. Its guard relied on `is_first_collection`, which is process-lifetime while
+>   configuration is not, so configuring a studio URL or adding a game to a running install
+>   produced a fabricated `0 → N` alert. The user did not want follower alerting, so it was
+>   deleted rather than guarded. Skip Task 6 entirely. See the spec's Alerts section.
+> - **Task 1:** `get_latest_follower_count` returns `None`, not `0`, when no reading has
+>   ever succeeded. `None` and `0` are different facts and the UI renders them differently.
+> - **Task 5:** the throttle field is `followers_next_fetch` (an absolute due-time), not
+>   `followers_last_fetched`. A failure schedules `FOLLOWER_RETRY_INTERVAL` (300s) rather
+>   than leaving the timestamp unstamped, which would otherwise retry a permanently failing
+>   page on every poll and block sales collection behind `fetch_html`'s 60s sleep.
+> - **Task 8:** the render path tests explicitly for `null`/`undefined` and shows `--`.
+>   A `|| 0` fallback is the bug it was written to avoid.
+> - **Task 2, 3, 9:** amended inline where the plan's original code was wrong.
+
 **Architecture:** No Steamworks API exposes follower counts, so both numbers are scraped from public HTML with `HTMLParser` subclasses following the existing `_DiscussionListParser` pattern. Counts are stored one row per day in a single `follower_history` table, with the studio under a sentinel `app_id` mirroring the existing `country_code='__all__'` convention. The collector fetches on a 30 minute throttle reusing the discussions throttle pattern.
 
 **Tech Stack:** Python 3 standard library only (`sqlite3`, `html.parser`, `http.server`), Chart.js 4.4.1 loaded from CDN, `unittest` for tests.
@@ -276,6 +294,12 @@ _MEMBERS_HTML_SINGLE_PAGE = '''<html><body>
   4 Members </div>
 </body></html>'''
 
+_MEMBERS_HTML_GERMAN = '''<html><body>
+<div class="group_paging">
+  <div class="pageLinks"> </div>
+  1 - 31 von 44 Mitglieder </div>
+</body></html>'''
+
 
 class TestGetGameFollowers(unittest.TestCase):
 
@@ -308,13 +332,17 @@ class TestGetGameFollowers(unittest.TestCase):
         with patch.object(dashboard, 'fetch_html', return_value=_MEMBERS_HTML) as m:
             dashboard.get_game_followers("2587260")
         url = m.call_args[0][0]
-        self.assertEqual(url, "https://steamcommunity.com/games/2587260/members")
+        self.assertEqual(url, "https://steamcommunity.com/games/2587260/members?l=english")
+
+    def test_returns_none_for_localised_page(self):
+        with patch.object(dashboard, 'fetch_html', return_value=_MEMBERS_HTML_GERMAN):
+            self.assertIsNone(dashboard.get_game_followers("2587260"))
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_followers.TestGetGameFollowers -v`
-Expected: 7 FAIL with `AttributeError: module 'dashboard' has no attribute 'get_game_followers'`.
+Expected: 8 FAIL with `AttributeError: module 'dashboard' has no attribute 'get_game_followers'`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -330,14 +358,18 @@ In `dashboard.py`, after `get_community_discussions` ends (currently line 583) a
 def _parse_member_count(text):
     """'1 - 31 of 44 Members' -> 44.
 
-    Falls back to the first integer in the text, because a group small enough
-    to fit on one page renders only '4 Members' with no ' of ' separator.
+    Falls back to a single integer token when ' of ' is absent, but returns
+    None if the text contains zero or multiple integer tokens. Ambiguous
+    multi-number strings mean the page was not in the expected format, and
+    returning None is safer than guessing, since a wrong value can never be
+    corrected.
     """
     if ' of ' in text:
         text = text.split(' of ')[-1]
-    for token in text.replace(',', '').split():
-        if token.isdigit():
-            return int(token)
+    tokens = text.replace(',', '').split()
+    integers = [token for token in tokens if token.isdigit()]
+    if len(integers) == 1:
+        return int(integers[0])
     return None
 
 
@@ -384,7 +416,7 @@ def get_game_followers(app_id):
     Returns None rather than 0 on failure. A transient error recorded as a mass
     unfollow would be permanent, since past days cannot be refetched.
     """
-    html = fetch_html(f"https://steamcommunity.com/games/{app_id}/members",
+    html = fetch_html(f"https://steamcommunity.com/games/{app_id}/members?l=english",
                       f"followers_{app_id}")
     if not html:
         return None
@@ -400,7 +432,15 @@ def get_game_followers(app_id):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_followers -v`
-Expected: 19 passed.
+Expected: 20 passed.
+
+**Why the locale is pinned and the fallback is strict:** `fetch_html` sends no
+`Accept-Language` header. A German page renders `1 - 31 von 44 Mitglieder`, which
+has no `" of "` separator, so a fallback that took the *first* integer token would
+silently return `1`. A wrong count is worse than no count, because past days
+cannot be refetched. `?l=english` forces the expected separator, and requiring
+exactly one integer token means anything unexpected becomes `None` and is retried
+next cycle rather than guessed at.
 
 - [ ] **Step 5: Verify against the live page**
 
@@ -491,12 +531,26 @@ class TestGetStudioFollowers(unittest.TestCase):
         with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML) as m:
             dashboard.get_studio_followers(target)
         self.assertEqual(m.call_args[0][0], target)
+
+    def test_dot_separated_count_is_none_not_wrong(self):
+        html = '<html><body><div class="num_followers">12.345</div></body></html>'
+        with patch.object(dashboard, 'fetch_html', return_value=html):
+            self.assertIsNone(dashboard.get_studio_followers("https://x/"))
 ```
+
+**No locale parameter on the studio URL, deliberately.** Verified live: the
+`num_followers` value is locale-invariant (`?l=english` and `?l=german` both render
+`>20`); only the sibling `num_followers_text` label changes, and the parser never
+reads it. The studio URL is user-supplied, so appending a parameter would cause more
+harm than the risk it avoids. The residual risk is a >999 count on a localised page
+rendering `12.345`; the strict `isdigit()` check yields `None` there, which is correct.
+`test_dot_separated_count_is_none_not_wrong` pins that so nobody later "fixes" the
+parser by also stripping dots, turning 12.345 into 12345.
 
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `python -m unittest tests.test_followers.TestGetStudioFollowers -v`
-Expected: 7 FAIL with `AttributeError: module 'dashboard' has no attribute 'get_studio_followers'`.
+Expected: 8 FAIL with `AttributeError: module 'dashboard' has no attribute 'get_studio_followers'`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -560,7 +614,7 @@ def get_studio_followers(studio_url):
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `python -m unittest tests.test_followers -v`
-Expected: 26 passed.
+Expected: 28 passed (37 across `tests/`).
 
 - [ ] **Step 5: Verify against the live page**
 
@@ -1372,6 +1426,7 @@ In the per-game data update path, after the `wishlistChart.update('none');` line
 ```javascript
       if (followerChart && !isPortfolioMode) {
         var fcc = getChartColors();
+        var isMobile = window.innerWidth <= 768;
         var fh = data.follower_history || [];
         followerChart.data.labels = fh.map(function(r) { return r[0]; });
         followerChart.data.datasets = [{
@@ -1387,6 +1442,8 @@ In the per-game data update path, after the `wishlistChart.update('none');` line
 ```
 
 `fcc`, not `cc`: see the scope note above. `fcc.gold` is the theme accent colour, despite the key name.
+
+`isMobile` needs a local declaration here for the same reason as `fcc`. It is declared only inside `initCharts` and `updatePortfolioCharts`, neither of which covers `fetchData`, so referencing it bare would be a `ReferenceError` that silently kills the chart update. The value matches both existing declarations exactly.
 
 - [ ] **Step 7: Draw the portfolio series**
 
