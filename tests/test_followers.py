@@ -173,40 +173,157 @@ _STUDIO_HTML_COMMAS = '''<html><body>
 </body></html>'''
 
 
+def _creator_json(followers=20, name="Lime Blossom Studio", success=1):
+    return {"success": success, "creator_clan_id": 44681599, "name": name,
+            "followers": followers, "vanity": "limeblossom"}
+
+
 class TestGetStudioFollowers(unittest.TestCase):
+    """The HTML path is the fallback; every test pins which path it exercises.
+
+    fetch_json must be patched in all of these. Left unpatched it reaches the
+    live store endpoint, which made these tests pass by accident over the
+    network rather than against the fixture.
+    """
+
+    def setUp(self):
+        # Module-level cache; leaking a clan id between tests would let one
+        # test's URL satisfy another's lookup.
+        dashboard._studio_clan_ids.clear()
 
     def test_parses_follower_count(self):
-        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML):
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML), \
+             patch.object(dashboard, 'fetch_json', return_value=None):
             self.assertEqual(
                 dashboard.get_studio_followers("https://store.steampowered.com/developer/LimeBlossom"), 20)
 
     def test_parses_comma_separated_count(self):
-        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML_COMMAS):
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML_COMMAS), \
+             patch.object(dashboard, 'fetch_json', return_value=None):
             self.assertEqual(dashboard.get_studio_followers("https://x/"), 12345)
 
     def test_ignores_num_followers_text_label(self):
         html = '<html><body><div class="num_followers_text">Followers</div></body></html>'
-        with patch.object(dashboard, 'fetch_html', return_value=html):
+        with patch.object(dashboard, 'fetch_html', return_value=html), \
+             patch.object(dashboard, 'fetch_json', return_value=None):
             self.assertIsNone(dashboard.get_studio_followers("https://x/"))
 
     def test_returns_none_when_fetch_fails(self):
-        with patch.object(dashboard, 'fetch_html', return_value=None):
+        with patch.object(dashboard, 'fetch_html', return_value=None), \
+             patch.object(dashboard, 'fetch_json', return_value=None):
             self.assertIsNone(dashboard.get_studio_followers("https://x/"))
 
     def test_returns_none_when_markup_absent(self):
-        with patch.object(dashboard, 'fetch_html', return_value='<html><body></body></html>'):
+        with patch.object(dashboard, 'fetch_html', return_value='<html><body></body></html>'), \
+             patch.object(dashboard, 'fetch_json', return_value=None):
             self.assertIsNone(dashboard.get_studio_followers("https://x/"))
 
-    def test_blank_url_does_not_fetch(self):
-        with patch.object(dashboard, 'fetch_html') as m:
+    def test_blank_url_touches_no_network(self):
+        with patch.object(dashboard, 'fetch_html') as mh, \
+             patch.object(dashboard, 'fetch_json') as mj:
             self.assertIsNone(dashboard.get_studio_followers(""))
-        m.assert_not_called()
+        mh.assert_not_called()
+        mj.assert_not_called()
 
-    def test_fetches_the_url_given(self):
-        target = "https://store.steampowered.com/curator/44681599"
-        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML) as m:
+    def test_developer_url_fetches_the_page_to_find_the_clan_id(self):
+        target = "https://store.steampowered.com/developer/LimeBlossom"
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML) as mh, \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json()):
+            self.assertEqual(dashboard.get_studio_followers(target), 20)
+        self.assertEqual(mh.call_args[0][0], target)
+
+    def test_curator_url_skips_the_page_fetch_entirely(self):
+        """The id is in the URL, so no page needs reading."""
+        with patch.object(dashboard, 'fetch_html') as mh, \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json(31)) as mj:
+            self.assertEqual(
+                dashboard.get_studio_followers("https://store.steampowered.com/curator/44681599"), 31)
+        mh.assert_not_called()
+        self.assertIn("44681599", mj.call_args[0][0])
+
+    def test_json_preferred_over_markup_when_both_available(self):
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML), \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json(99)):
+            self.assertEqual(dashboard.get_studio_followers("https://x/curator/44681599"), 99)
+
+    def test_null_name_is_none_not_a_fabricated_zero(self):
+        """A nonexistent clan id answers success:1, followers:0, name:null.
+
+        Trusting that would store a zero for a mistyped URL, permanently.
+        """
+        with patch.object(dashboard, 'fetch_html', return_value=None), \
+             patch.object(dashboard, 'fetch_json',
+                          return_value=_creator_json(followers=0, name=None)):
+            self.assertIsNone(
+                dashboard.get_studio_followers("https://x/curator/999999999"))
+
+    def test_invalid_clan_does_not_fall_back_to_a_placeholder_page(self):
+        """Regression: the markup fallback used to defeat the JSON guard.
+
+        A nonexistent curator's store page still renders a num_followers div
+        showing 0, so falling back after an 'invalid' JSON answer stored a
+        fabricated zero. Verified live before this guard existed.
+        """
+        placeholder = ('<html><body><div class="num_followers" '
+                       'id="CuratorNumFollowers_999999999">0</div></body></html>')
+        with patch.object(dashboard, 'fetch_html', return_value=placeholder) as mh, \
+             patch.object(dashboard, 'fetch_json',
+                          return_value=_creator_json(followers=0, name=None)):
+            self.assertIsNone(
+                dashboard.get_studio_followers("https://x/curator/999999999"))
+        mh.assert_not_called()
+
+    def test_invalid_clan_is_not_cached(self):
+        """A bad id must not be remembered as though it resolved."""
+        with patch.object(dashboard, 'fetch_html', return_value=None), \
+             patch.object(dashboard, 'fetch_json',
+                          return_value=_creator_json(followers=0, name=None)):
+            dashboard.get_studio_followers("https://x/curator/999999999")
+        self.assertEqual(dashboard._studio_clan_ids, {})
+
+    def test_unsuccessful_json_falls_back_to_markup(self):
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML), \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json(success=0)):
+            self.assertEqual(dashboard.get_studio_followers("https://x/curator/44681599"), 20)
+
+    def test_genuine_zero_from_json_is_kept(self):
+        with patch.object(dashboard, 'fetch_html', return_value=None), \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json(followers=0)):
+            self.assertEqual(
+                dashboard.get_studio_followers("https://x/curator/44681599"), 0)
+
+    def test_clan_id_cached_so_the_page_is_read_once(self):
+        target = "https://store.steampowered.com/developer/LimeBlossom"
+        with patch.object(dashboard, 'fetch_html', return_value=_STUDIO_HTML) as mh, \
+             patch.object(dashboard, 'fetch_json', return_value=_creator_json()):
             dashboard.get_studio_followers(target)
-        self.assertEqual(m.call_args[0][0], target)
+            dashboard.get_studio_followers(target)
+        self.assertEqual(mh.call_count, 1)
+
+
+class TestClanIdExtraction(unittest.TestCase):
+
+    def test_from_curator_url(self):
+        self.assertEqual(
+            dashboard._clan_id_from_url("https://store.steampowered.com/curator/44681599"), "44681599")
+        self.assertEqual(
+            dashboard._clan_id_from_url("https://store.steampowered.com/curator/44681599/"), "44681599")
+        self.assertEqual(
+            dashboard._clan_id_from_url("https://store.steampowered.com/curator/44681599?l=english"), "44681599")
+
+    def test_none_from_developer_url(self):
+        self.assertIsNone(
+            dashboard._clan_id_from_url("https://store.steampowered.com/developer/LimeBlossom"))
+
+    def test_from_follower_div_id(self):
+        self.assertEqual(dashboard._clan_id_from_html(_STUDIO_HTML), "44681599")
+
+    def test_from_curator_clanid_query_param(self):
+        html = '<a href="/app/1?curator_clanid=44681599&snr=x">x</a>'
+        self.assertEqual(dashboard._clan_id_from_html(html), "44681599")
+
+    def test_none_when_absent(self):
+        self.assertIsNone(dashboard._clan_id_from_html("<html><body></body></html>"))
 
     def test_dot_separated_count_is_none_not_wrong(self):
         html = '<html><body><div class="num_followers">12.345</div></body></html>'

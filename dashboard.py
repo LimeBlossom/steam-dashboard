@@ -833,19 +833,109 @@ class _CuratorFollowerParser(HTMLParser):
             self._text.append(data)
 
 
+_studio_clan_ids = {}
+
+
+def _clan_id_from_url(studio_url):
+    """'.../curator/44681599' -> '44681599', else None.
+
+    A curator URL carries the id already, so no page fetch is needed.
+    """
+    parts = [p for p in studio_url.split('?')[0].rstrip('/').split('/') if p]
+    for i, p in enumerate(parts):
+        if p == 'curator' and i + 1 < len(parts) and parts[i + 1].isdigit():
+            return parts[i + 1]
+    return None
+
+
+def _clan_id_from_html(studio_html):
+    """Pull the curator clan id out of a developer or publisher page.
+
+    The id appears both as the follower div's id suffix and as a query
+    parameter on the page's own links, so try each in turn.
+    """
+    for marker in ('CuratorNumFollowers_', 'curator_clanid='):
+        i = studio_html.find(marker)
+        if i == -1:
+            continue
+        digits = ''
+        for ch in studio_html[i + len(marker):]:
+            if not ch.isdigit():
+                break
+            digits += ch
+        if digits:
+            return digits
+    return None
+
+
+def _studio_followers_from_json(clan_id):
+    """Read the typed followers field from the creator-home endpoint.
+
+    Preferred over scraping the page because a JSON field name survives store
+    redesigns that would break a CSS-class lookup.
+
+    Returns (outcome, count):
+      'ok'          a real reading, count is an int (possibly a genuine 0)
+      'invalid'     the endpoint answered and no such curator exists
+      'unavailable' could not reach or understand it, so try the markup instead
+
+    The 'invalid' case must be distinguished from 'unavailable'. A nonexistent
+    clan id still answers success:1 with followers:0 and a null name, AND its
+    store page renders a placeholder showing 0 followers. So falling back to the
+    markup after an 'invalid' answer would record a fabricated 0 for a mistyped
+    URL, permanently, since past days cannot be refetched.
+    """
+    data = fetch_json(
+        f"https://store.steampowered.com/curator/{clan_id}/ajaxgetcreatorhomeinfo"
+        f"?get_appids=false&l=english",
+        "followers_studio_json"
+    )
+    if not data or not data.get('success'):
+        return ('unavailable', None)
+    if not data.get('name'):
+        return ('invalid', None)
+    n = data.get('followers')
+    if isinstance(n, int) and n >= 0:
+        return ('ok', n)
+    return ('unavailable', None)
+
+
 def get_studio_followers(studio_url):
     """Current studio follower count, or None if unset or unreadable.
 
-    Studio followers are independent of game followers, not a sum of them.
+    Tries the creator-home JSON endpoint first, falling back to parsing the page
+    markup. Studio followers are independent of game followers, not a sum.
     """
     if not studio_url:
         return None
-    html = fetch_html(studio_url, "followers_studio")
-    if not html:
+
+    clan_id = _studio_clan_ids.get(studio_url) or _clan_id_from_url(studio_url)
+    studio_html = None
+    if not clan_id:
+        studio_html = fetch_html(studio_url, "followers_studio")
+        if studio_html:
+            clan_id = _clan_id_from_html(studio_html)
+
+    if clan_id:
+        outcome, count = _studio_followers_from_json(clan_id)
+        if outcome == 'invalid':
+            # Definitively no such curator. Do NOT fall back: that page renders a
+            # placeholder 0, which would be stored as if it were a real reading.
+            print(f"  [ERROR] followers_studio: no curator with clan id {clan_id}, "
+                  f"check the studio URL")
+            return None
+        _studio_clan_ids[studio_url] = clan_id
+        if outcome == 'ok':
+            return count
+
+    # JSON unavailable: fall back to the markup, reusing the page if already read.
+    if studio_html is None:
+        studio_html = fetch_html(studio_url, "followers_studio")
+    if not studio_html:
         return None
     parser = _CuratorFollowerParser()
     try:
-        parser.feed(html)
+        parser.feed(studio_html)
     except Exception as e:
         print(f"  [ERROR] followers_studio: parse failed ({e})")
         return None
