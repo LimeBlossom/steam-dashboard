@@ -14,6 +14,8 @@ import threading
 import sqlite3
 import os
 import sys
+import csv
+import io
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
@@ -303,6 +305,82 @@ def get_latest_follower_count(app_id):
     ).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def parse_follower_csv(text):
+    """Parse a follower history CSV into [(date, count)], newest last.
+
+    Accepts the SteamDB chart export (`"DateTime","Followers"`, where DateTime
+    carries a time component) and a plain `date,count` file for hand-entered
+    points. Returns (rows, rejected) so the caller can report bad lines instead
+    of silently dropping them: a row we cannot read is worth telling the user
+    about, since the whole point of importing is to fill gaps accurately.
+    """
+    rows, rejected = [], []
+    # A leading BOM stops csv recognising the opening quote, so the first header
+    # arrives as '﻿"DateTime"' and lookup fails. The CLI reads with
+    # utf-8-sig, but strip it here too so the function is correct for any caller.
+    text = text.lstrip('﻿')
+    reader = csv.DictReader(io.StringIO(text))
+    fields = [f.strip().lower() for f in (reader.fieldnames or [])]
+    date_key = next((f for f in ('datetime', 'date') if f in fields), None)
+    count_key = next((f for f in ('followers', 'count') if f in fields), None)
+    if not date_key or not count_key:
+        raise ValueError(
+            f"need a date column (DateTime or date) and a count column "
+            f"(Followers or count); found {reader.fieldnames}")
+
+    seen = set()
+    for n, raw in enumerate(reader, start=2):
+        lowered = {(k or '').strip().lower(): v for k, v in raw.items()}
+        d, c = (lowered.get(date_key) or '').strip(), (lowered.get(count_key) or '').strip()
+        try:
+            day = datetime.strptime(d.split(' ')[0], "%Y-%m-%d").date().isoformat()
+            count = int(c)
+            if count < 0:
+                raise ValueError("negative count")
+        except (ValueError, AttributeError) as e:
+            rejected.append((n, f"{d!r},{c!r}", str(e)))
+            continue
+        if day in seen:
+            rejected.append((n, f"{d!r},{c!r}", "duplicate date"))
+            continue
+        seen.add(day)
+        rows.append((day, count))
+
+    rows.sort()
+    return rows, rejected
+
+
+def import_follower_history(app_id, rows):
+    """Insert historical rows, never overwriting an existing one.
+
+    Uses INSERT OR IGNORE rather than OR REPLACE so a scraped reading always
+    wins over an imported one. Imported points come from a third party and are
+    less trustworthy than a value this dashboard read itself.
+
+    Returns (inserted, skipped).
+    """
+    conn = get_conn()
+    before = conn.total_changes
+    conn.executemany(
+        "INSERT OR IGNORE INTO follower_history VALUES (?, ?, ?)",
+        [(str(app_id), day, count) for day, count in rows]
+    )
+    conn.commit()
+    inserted = conn.total_changes - before
+    conn.close()
+    return inserted, len(rows) - inserted
+
+
+def app_id_from_csv_name(path):
+    """'steamdb_chart_2587260.csv' -> '2587260', else None.
+
+    SteamDB names its export after the app, so the id need not be retyped.
+    """
+    stem = os.path.splitext(os.path.basename(path))[0]
+    digits = stem.rsplit('_', 1)[-1]
+    return digits if digits.isdigit() else None
 
 
 def record_follower_count(app_id, count):
@@ -4005,5 +4083,109 @@ def main():
         server.shutdown()
 
 
+def cli_import_followers(paths, app_id_override=None, dry_run=False):
+    """Import historical follower rows from CSV files. Returns an exit code.
+
+    Steam exposes no follower API and no history, so a series can only start the
+    day collection starts. This lets a trusted external export (a SteamDB chart
+    CSV, or hand-entered points) fill in the past. Scraped rows always win.
+    """
+    init_db()
+    total_in = total_skip = 0
+    failed = False
+
+    for path in paths:
+        app_id = app_id_override or app_id_from_csv_name(path)
+        if not app_id:
+            print(f"  [SKIP] {path}: cannot tell which app this is. "
+                  f"Name it steamdb_chart_<appid>.csv or pass --app-id")
+            failed = True
+            continue
+        try:
+            with open(path, encoding='utf-8-sig') as f:
+                rows, rejected = parse_follower_csv(f.read())
+        except (OSError, ValueError) as e:
+            print(f"  [SKIP] {path}: {e}")
+            failed = True
+            continue
+
+        label = f"{app_id}"
+        if not rows:
+            print(f"  [SKIP] {path}: no usable rows")
+            failed = True
+            continue
+
+        if dry_run:
+            print(f"  [DRY] {label}: would import {len(rows)} rows "
+                  f"{rows[0][0]} .. {rows[-1][0]} (values {rows[0][1]} -> {rows[-1][1]})")
+            inserted = skipped = 0
+        else:
+            inserted, skipped = import_follower_history(app_id, rows)
+            print(f"  [OK]  {label}: {inserted} inserted, {skipped} already present, "
+                  f"{rows[0][0]} .. {rows[-1][0]} (values {rows[0][1]} -> {rows[-1][1]})")
+        total_in += inserted
+        total_skip += skipped
+
+        for n, raw, why in rejected[:5]:
+            print(f"        line {n} rejected ({why}): {raw}")
+        if len(rejected) > 5:
+            print(f"        ... and {len(rejected) - 5} more rejected rows")
+
+    verb = "would import" if dry_run else "imported"
+    print(f"\n{verb} {total_in} rows, {total_skip} left alone (already recorded)")
+    return 1 if failed else 0
+
+
+def cli_anchor_zero(app_id, day, dry_run=False):
+    """Record a known-true zero: followers were 0 before a store page existed."""
+    init_db()
+    try:
+        day = datetime.strptime(day, "%Y-%m-%d").date().isoformat()
+    except ValueError:
+        print(f"  bad date {day!r}, expected YYYY-MM-DD")
+        return 1
+    if dry_run:
+        print(f"  [DRY] would anchor {app_id} at 0 on {day}")
+        return 0
+    inserted, skipped = import_follower_history(app_id, [(day, 0)])
+    print(f"  anchored {app_id} at 0 on {day}"
+          if inserted else f"  {app_id} already has a row for {day}, left alone")
+    return 0
+
+
+def _cli(argv):
+    """Handle the maintenance subcommands. Returns None to fall through to main()."""
+    dry = '--dry-run' in argv
+    argv = [a for a in argv if a != '--dry-run']
+
+    if '--import-followers' in argv:
+        i = argv.index('--import-followers')
+        rest = argv[i + 1:]
+        override = None
+        if '--app-id' in rest:
+            j = rest.index('--app-id')
+            override = rest[j + 1] if j + 1 < len(rest) else None
+            rest = rest[:j] + rest[j + 2:]
+        if not rest:
+            print("usage: dashboard.py --import-followers <csv> [<csv>...] "
+                  "[--app-id <id>] [--dry-run]")
+            return 1
+        return cli_import_followers(rest, override, dry)
+
+    if '--anchor-zero' in argv:
+        i = argv.index('--anchor-zero')
+        rest = argv[i + 1:]
+        if len(rest) < 2:
+            print("usage: dashboard.py --anchor-zero <app_id> <YYYY-MM-DD> [--dry-run]")
+            return 1
+        return cli_anchor_zero(rest[0], rest[1], dry)
+
+    return None
+
+
 if __name__ == '__main__':
-    main()
+    code = _cli(sys.argv[1:])
+    if code is None:
+        main()
+    else:
+        sys.exit(code)

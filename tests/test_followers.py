@@ -378,5 +378,95 @@ class TestApiDataHasNoStudioKey(unittest.TestCase):
             self.assertNotIn(key, payload)
 
 
+_STEAMDB_CSV = '\ufeff"DateTime","Followers"\n' \
+               '"2023-09-17 00:00:00",2\n' \
+               '"2023-09-18 00:00:00",3\n' \
+               '"2023-09-19 00:00:00",3\n'
+
+_PLAIN_CSV = "date,count\n2026-01-01,10\n2026-01-02,11\n"
+
+
+class TestParseFollowerCsv(unittest.TestCase):
+
+    def test_parses_steamdb_export_with_bom_and_time(self):
+        rows, rejected = dashboard.parse_follower_csv(_STEAMDB_CSV)
+        self.assertEqual(rows, [("2023-09-17", 2), ("2023-09-18", 3), ("2023-09-19", 3)])
+        self.assertEqual(rejected, [])
+
+    def test_parses_plain_date_count(self):
+        rows, rejected = dashboard.parse_follower_csv(_PLAIN_CSV)
+        self.assertEqual(rows, [("2026-01-01", 10), ("2026-01-02", 11)])
+        self.assertEqual(rejected, [])
+
+    def test_rows_sorted_ascending_regardless_of_file_order(self):
+        rows, _ = dashboard.parse_follower_csv(
+            "date,count\n2026-01-03,3\n2026-01-01,1\n2026-01-02,2\n")
+        self.assertEqual([d for d, _ in rows], ["2026-01-01", "2026-01-02", "2026-01-03"])
+
+    def test_unknown_headers_raise(self):
+        with self.assertRaises(ValueError):
+            dashboard.parse_follower_csv("foo,bar\n1,2\n")
+
+    def test_bad_rows_rejected_not_silently_dropped(self):
+        rows, rejected = dashboard.parse_follower_csv(
+            "date,count\n2026-01-01,10\nnot-a-date,5\n2026-01-02,oops\n2026-01-03,-4\n")
+        self.assertEqual(rows, [("2026-01-01", 10)])
+        self.assertEqual(len(rejected), 3)
+
+    def test_duplicate_date_rejected(self):
+        rows, rejected = dashboard.parse_follower_csv(
+            "date,count\n2026-01-01,10\n2026-01-01,11\n")
+        self.assertEqual(rows, [("2026-01-01", 10)])
+        self.assertEqual(len(rejected), 1)
+
+    def test_genuine_zero_is_kept(self):
+        rows, rejected = dashboard.parse_follower_csv("date,count\n2026-01-01,0\n")
+        self.assertEqual(rows, [("2026-01-01", 0)])
+        self.assertEqual(rejected, [])
+
+    def test_app_id_derived_from_steamdb_filename(self):
+        self.assertEqual(dashboard.app_id_from_csv_name("steamdb_chart_2587260.csv"), "2587260")
+        self.assertEqual(
+            dashboard.app_id_from_csv_name(r"C:\x\steamdb_chart_4627290.csv"), "4627290")
+        self.assertIsNone(dashboard.app_id_from_csv_name("followers.csv"))
+
+
+class TestImportFollowerHistory(unittest.TestCase):
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._patcher = patch.object(dashboard, 'DB_PATH', os.path.join(self._tmp, 'test.db'))
+        self._patcher.start()
+        dashboard.init_db()
+
+    def tearDown(self):
+        self._patcher.stop()
+        shutil.rmtree(self._tmp, ignore_errors=True)
+
+    def test_inserts_all_rows(self):
+        inserted, skipped = dashboard.import_follower_history(
+            "1", [("2026-01-01", 10), ("2026-01-02", 11)])
+        self.assertEqual((inserted, skipped), (2, 0))
+        self.assertEqual(dashboard.get_follower_history("1"),
+                         [("2026-01-01", 10), ("2026-01-02", 11)])
+
+    def test_never_overwrites_a_scraped_row(self):
+        """A reading this dashboard took itself must outrank an imported one."""
+        dashboard.save_follower_count("1", 44)          # today, scraped
+        today = dashboard.datetime.now().strftime("%Y-%m-%d")
+        inserted, skipped = dashboard.import_follower_history("1", [(today, 99)])
+        self.assertEqual((inserted, skipped), (0, 1))
+        self.assertEqual(dashboard.get_latest_follower_count("1"), 44)
+
+    def test_import_is_scoped_to_its_app(self):
+        dashboard.import_follower_history("1", [("2026-01-01", 10)])
+        self.assertEqual(dashboard.get_follower_history("2"), [])
+
+    def test_anchor_zero_writes_a_real_zero(self):
+        dashboard.import_follower_history("1", [("2026-01-01", 0)])
+        self.assertEqual(dashboard.get_follower_history("1"), [("2026-01-01", 0)])
+        self.assertEqual(dashboard.get_latest_follower_count("1"), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
