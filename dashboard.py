@@ -3194,11 +3194,17 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     // Follower growth. Single shared y-axis: a second axis for the studio
     // series would obscure that these measure different things.
     //
-    // Every dataset here uses tension 0, unlike the other charts in this file.
-    // Followers are integers that step by one on a given day, often after a long
-    // flat run. Bezier smoothing overshoots that shape, drawing a rounded hook
-    // above the final value: a count the game never actually had. Straight
-    // segments cannot invent a value that was never recorded.
+    // Every dataset here is stepped with tension 0, unlike the other charts in
+    // this file. Followers are integers that hold for days or months and then
+    // step by one, so this IS a step function and drawing it as one is accurate,
+    // not stylistic. Bezier smoothing overshot the shape into a rounded hook
+    // above the final value, a count the game never actually had.
+    //
+    // Stepping also renders the imported-history gap correctly. SteamDB's export
+    // trims trailing unchanged days (verified: all four series end on a change
+    // day, which is ~4.5% of rows, so it is not chance). A sloped line across
+    // that gap would imply gradual growth; holding the last known value until
+    // the next reading matches how the metric actually behaves.
     followerChart = new Chart(document.getElementById('followerChart'), {
       type: 'line',
       data: { labels: [], datasets: [] },
@@ -3399,7 +3405,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
             return studioByDate[d] === undefined ? null : studioByDate[d];
           }),
           borderColor: fcc.gold, backgroundColor: 'transparent',
-          borderDash: [6, 3], borderWidth: 3, tension: 0,
+          borderDash: [6, 3], borderWidth: 3, tension: 0, stepped: 'after',
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent',
           spanGaps: true
@@ -3416,7 +3422,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
             return byDate[d] === undefined ? null : byDate[d];
           }),
           borderColor: color.border, backgroundColor: 'transparent',
-          borderWidth: 2, tension: 0,
+          borderWidth: 2, tension: 0, stepped: 'after',
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: color.border, pointBorderColor: 'transparent',
           spanGaps: true
@@ -3588,7 +3594,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
           }),
           spanGaps: true,
           borderColor: fcc.gold, backgroundColor: 'transparent',
-          borderWidth: 2, tension: 0,
+          borderWidth: 2, tension: 0, stepped: 'after',
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent'
         }];
