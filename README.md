@@ -16,6 +16,7 @@
 - **Country-level breakdown** — sales and wishlist data by region
 - **Concurrent player monitoring** — trend charts with historical data
 - **Wishlist tracking** — adds, removes, and conversion rates
+- **Follower growth tracking** — per-game and studio-wide follower counts over time; history starts at first collection and can't be backfilled, since Steam exposes no follower API
 - **Web-based setup wizard** — no config files to edit, ever
 - **Multi-game support** — monitor all your titles from one dashboard
 - **Mobile-friendly** — responsive design, check sales from your phone

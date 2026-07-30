@@ -26,6 +26,9 @@ VERSION = "1.0"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(SCRIPT_DIR, 'steam_dashboard.db')
 FINANCIAL_BASE = "https://partner.steam-api.com"
+STUDIO_APP_ID = '__studio__'
+FOLLOWER_FETCH_INTERVAL = 1800  # seconds; followers move a few times a week
+FOLLOWER_RETRY_INTERVAL = 300  # seconds; back off a failing page without pinning the poll loop
 
 # ========== DATABASE ==========
 
@@ -64,6 +67,10 @@ def init_db():
         fetch_attempts INTEGER DEFAULT 0,
         PRIMARY KEY (app_id, date, country_code)
     )''')
+    c.execute('''CREATE TABLE IF NOT EXISTS follower_history (
+        app_id TEXT, date TEXT, follower_count INTEGER,
+        PRIMARY KEY (app_id, date)
+    )''')
     conn.commit()
     conn.close()
 
@@ -98,6 +105,7 @@ def get_all_settings():
         'steam_api_key': get_setting('steam_api_key', ''),
         'steam_financial_key': get_setting('steam_financial_key', ''),
         'games': get_setting('games', []),
+        'studio': get_setting('studio', {'name': '', 'url': ''}),
         'telegram': get_setting('telegram', {'enabled': False, 'bot_token': '', 'chat_ids': []}),
         'dashboard': get_setting('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'steam'}),
     }
@@ -107,6 +115,7 @@ def save_all_settings(data):
     set_setting('steam_api_key', data.get('steam_api_key', ''))
     set_setting('steam_financial_key', data.get('steam_financial_key', ''))
     set_setting('games', data.get('games', []))
+    set_setting('studio', data.get('studio', {'name': '', 'url': ''}))
     set_setting('telegram', data.get('telegram', {'enabled': False, 'bot_token': '', 'chat_ids': []}))
     set_setting('dashboard', data.get('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'steam'}))
 
@@ -259,6 +268,55 @@ def get_daily_wishlists(app_id):
     ).fetchall()
     conn.close()
     return rows
+
+
+def save_follower_count(app_id, count):
+    """Record today's follower count, overwriting any earlier reading for today."""
+    conn = get_conn()
+    conn.execute("INSERT OR REPLACE INTO follower_history VALUES (?, ?, ?)",
+                 (str(app_id), datetime.now().strftime("%Y-%m-%d"), count))
+    conn.commit()
+    conn.close()
+
+
+def get_follower_history(app_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT date, follower_count FROM follower_history WHERE app_id=? ORDER BY date",
+        (str(app_id),)
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def get_latest_follower_count(app_id):
+    """Most recent follower reading, or None when no reading has ever succeeded.
+
+    None must not be conflated with a genuine 0: a page that never resolves
+    (unreachable members page, parse failure) has no row at all, and the UI
+    needs to render that differently from a real zero-follower count.
+    """
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT follower_count FROM follower_history WHERE app_id=? ORDER BY date DESC LIMIT 1",
+        (str(app_id),)
+    ).fetchone()
+    conn.close()
+    return row[0] if row else None
+
+
+def record_follower_count(app_id, count):
+    """Persist a follower reading. Returns True when a row was written.
+
+    A None count means the fetch failed, and nothing is written. Recording a
+    failure as 0 would look like every follower unfollowing at once, and the
+    damage would be permanent because past days cannot be refetched. Note that
+    a genuine 0 IS written; only None is treated as absence of data.
+    """
+    if count is None:
+        return False
+    save_follower_count(app_id, count)
+    return True
 
 
 class RateLimiter:
@@ -580,6 +638,140 @@ def get_community_discussions(app_id, count=5):
             } if dp.latest_reply else None,
         })
     return result
+
+
+# --- Followers ---
+#
+# Valve exposes no Web API for follower counts, so both the per-game and the
+# studio numbers are scraped from public pages. Following a game is joining its
+# community hub group, so the hub member count IS the follower count.
+
+def _parse_member_count(text):
+    """'1 - 31 of 44 Members' -> 44.
+
+    Falls back to a single integer token when ' of ' is absent, but returns
+    None if the text contains zero or multiple integer tokens. Ambiguous
+    multi-number strings mean the page was not in the expected format, and
+    returning None is safer than guessing, since a wrong value can never be
+    corrected.
+    """
+    if ' of ' in text:
+        text = text.split(' of ')[-1]
+    tokens = text.replace(',', '').split()
+    integers = [token for token in tokens if token.isdigit()]
+    if len(integers) == 1:
+        return int(integers[0])
+    return None
+
+
+class _GroupMemberCountParser(HTMLParser):
+    """Pulls the follower count out of a community hub members page.
+
+    Target markup, which appears twice per page:
+        <div class="group_paging">
+          <div class="pageLinks"> </div>
+          1 - 31 of 44 Members </div>
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._depth = 0
+        self._text = []
+        self.count = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag != 'div':
+            return
+        if self._depth > 0:
+            self._depth += 1
+            return
+        cls = dict(attrs).get('class') or ''
+        if 'group_paging' in cls.split():
+            self._depth = 1
+
+    def handle_endtag(self, tag):
+        if tag == 'div' and self._depth > 0:
+            self._depth -= 1
+            if self._depth == 0 and self.count is None:
+                self.count = _parse_member_count(''.join(self._text))
+                self._text = []
+
+    def handle_data(self, data):
+        if self._depth > 0 and self.count is None:
+            self._text.append(data)
+
+
+def get_game_followers(app_id):
+    """Current follower count for a game, or None if it could not be read.
+
+    Returns None rather than 0 on failure. A transient error recorded as a mass
+    unfollow would be permanent, since past days cannot be refetched.
+    """
+    html = fetch_html(f"https://steamcommunity.com/games/{app_id}/members?l=english",
+                      f"followers_{app_id}")
+    if not html:
+        return None
+    parser = _GroupMemberCountParser()
+    try:
+        parser.feed(html)
+    except Exception as e:
+        print(f"  [ERROR] followers_{app_id}: parse failed ({e})")
+        return None
+    return parser.count
+
+
+class _CuratorFollowerParser(HTMLParser):
+    """Pulls the follower count out of a curator-backed store page.
+
+    /developer/<slug>, /publisher/<slug> and /curator/<id> all render:
+        <div class="num_followers" id="CuratorNumFollowers_44681599">20</div>
+
+    Keyed on the class, not the id, because the id embeds a clan ID. The exact
+    token match also avoids the sibling div.num_followers_text label.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._in_count = False
+        self._text = []
+        self.count = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == 'div' and self.count is None:
+            cls = dict(attrs).get('class') or ''
+            if 'num_followers' in cls.split():
+                self._in_count = True
+
+    def handle_endtag(self, tag):
+        if tag == 'div' and self._in_count:
+            self._in_count = False
+            digits = ''.join(self._text).replace(',', '').strip()
+            if digits.isdigit():
+                self.count = int(digits)
+            self._text = []
+
+    def handle_data(self, data):
+        if self._in_count:
+            self._text.append(data)
+
+
+def get_studio_followers(studio_url):
+    """Current studio follower count, or None if unset or unreadable.
+
+    Studio followers are independent of game followers, not a sum of them.
+    """
+    if not studio_url:
+        return None
+    html = fetch_html(studio_url, "followers_studio")
+    if not html:
+        return None
+    parser = _CuratorFollowerParser()
+    try:
+        parser.feed(html)
+    except Exception as e:
+        print(f"  [ERROR] followers_studio: parse failed ({e})")
+        return None
+    return parser.count
 
 
 # ========== FINANCIAL API ==========
@@ -985,6 +1177,8 @@ class GameState:
         self.cached_wishlist_by_country = load_wishlists_by_country(app_id)
         self.cached_discussions = []
         self.discussions_last_fetched = 0.0
+        self.cached_followers = get_latest_follower_count(app_id)
+        self.followers_next_fetch = 0.0
 
 
 class DataCollector:
@@ -995,6 +1189,8 @@ class DataCollector:
         self._lock = threading.Lock()
         self.status = ""
         self.throttled = False
+        self.cached_studio_followers = get_latest_follower_count(STUDIO_APP_ID)
+        self.studio_followers_next_fetch = 0.0
 
     def get_state(self, app_id):
         app_id = str(app_id)
@@ -1085,6 +1281,18 @@ class DataCollector:
                     gs.cached_discussions = discussions
                     gs.discussions_last_fetched = time.time()
 
+            if time.time() >= gs.followers_next_fetch:
+                self.status = f"{game_name}: Fetching followers"
+                followers = get_game_followers(app_id)
+                self.status = ""
+                if record_follower_count(app_id, followers):
+                    gs.cached_followers = followers
+                    gs.followers_next_fetch = time.time() + FOLLOWER_FETCH_INTERVAL
+                    print(f"  [{game_name}] Followers: {followers}")
+                else:
+                    gs.followers_next_fetch = time.time() + FOLLOWER_RETRY_INTERVAL
+                    print(f"  [{game_name}] Followers: fetch failed, keeping {gs.cached_followers}")
+
             # Telegram alerts (skip on first collection)
             if self.is_first_collection:
                 gs.last_wishlist_net = wl_net
@@ -1147,6 +1355,20 @@ class DataCollector:
             gs.last_total_units = total_units
 
             print(f"  [{game_name}] Players: {players} | Reviews: {total_reviews} | Sales: {total_units} | Peak: {gs.peak_players}")
+
+        studio_cfg = settings.get('studio', {})
+        studio_url = studio_cfg.get('url', '')
+        if studio_url and time.time() >= self.studio_followers_next_fetch:
+            self.status = "Fetching studio followers"
+            studio_followers = get_studio_followers(studio_url)
+            self.status = ""
+            if record_follower_count(STUDIO_APP_ID, studio_followers):
+                self.cached_studio_followers = studio_followers
+                self.studio_followers_next_fetch = time.time() + FOLLOWER_FETCH_INTERVAL
+                print(f"  [studio] Followers: {studio_followers}")
+            else:
+                self.studio_followers_next_fetch = time.time() + FOLLOWER_RETRY_INTERVAL
+                print(f"  [studio] Followers: fetch failed, keeping {self.cached_studio_followers}")
 
         self.is_first_collection = False
         self.status = ""
@@ -1603,6 +1825,15 @@ input::placeholder {
         Steamworks Partner &rarr; Users &amp; Permissions &rarr; Manage Groups &rarr; [group] &rarr; Web API Key
       </div>
 
+      <label style="margin-top:18px;">Studio Name (optional)</label>
+      <input type="text" id="studioName" placeholder="Your Studio Name" />
+
+      <label style="margin-top:18px;">Studio Page URL (optional) <span class="key-status pending" id="studioStatus"></span></label>
+      <input type="text" id="studioUrl" placeholder="https://store.steampowered.com/developer/YourStudio" />
+      <div class="hint" style="margin-bottom:0;margin-top:6px;font-size:11px;">
+        Your developer, publisher, or curator page. Leave blank to hide studio followers.
+      </div>
+
       <hr class="divider">
 
       <h2 style="margin-top:0;">Your Games</h2>
@@ -1676,6 +1907,9 @@ input::placeholder {
     connectionTested = true;
     document.getElementById('steamApiKey').value = existingSettings.steam_api_key || '';
     document.getElementById('steamFinancialKey').value = existingSettings.steam_financial_key || '';
+    var studioCfg = existingSettings.studio || {};
+    document.getElementById('studioName').value = studioCfg.name || '';
+    document.getElementById('studioUrl').value = studioCfg.url || '';
     var tg = existingSettings.telegram || {};
     if (tg.enabled) {
       tgEnabled = true;
@@ -1773,6 +2007,8 @@ input::placeholder {
     var appIds = validGames.map(function(g) { return g.app_id; }).join(',');
     var url = '/api/test?api_key=' + encodeURIComponent(apiKey) + '&app_ids=' + encodeURIComponent(appIds);
     if (financialKey) url += '&financial_key=' + encodeURIComponent(financialKey);
+    var studioUrlVal = document.getElementById('studioUrl').value.trim();
+    if (studioUrlVal) url += '&studio_url=' + encodeURIComponent(studioUrlVal);
 
     fetch(url)
       .then(function(r) { return r.json(); })
@@ -1803,6 +2039,23 @@ input::placeholder {
             finSt.textContent = '\\u2717';
             lines.push('\\u2717 Financial API key error (sales data excluded)');
           }
+        }
+
+        // Studio status (optional, never blocks setup)
+        var studioSt = document.getElementById('studioStatus');
+        if (studioUrlVal && data.studio) {
+          if (data.studio.success) {
+            studioSt.className = 'key-status ok';
+            studioSt.textContent = '\\u2713';
+            lines.push('\\u2713 Studio page verified (' + data.studio.followers + ' followers)');
+          } else {
+            studioSt.className = 'key-status fail';
+            studioSt.textContent = '\\u2717';
+            lines.push('\\u2717 Studio page: ' + (data.studio.error || 'Error'));
+          }
+        } else {
+          studioSt.className = 'key-status pending';
+          studioSt.textContent = '';
         }
 
         // Per-game results
@@ -1926,6 +2179,10 @@ input::placeholder {
       steam_api_key: document.getElementById('steamApiKey').value.trim(),
       steam_financial_key: document.getElementById('steamFinancialKey').value.trim(),
       games: validGames,
+      studio: {
+        name: document.getElementById('studioName').value.trim(),
+        url: document.getElementById('studioUrl').value.trim()
+      },
       telegram: {
         enabled: tgEnabled,
         bot_token: document.getElementById('tgBotToken').value.trim(),
@@ -2117,7 +2374,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
 .dashboard { max-width: 1400px; margin: 0 auto; padding: 24px 24px 48px; }
 
 .metrics-grid {
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 12px; margin-bottom: 12px;
 }
 .metric-card {
@@ -2150,6 +2407,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
 
 .charts-grid { display: grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 12px; }
 .charts-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+.charts-grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .chart-card {
   position: relative;
   background: var(--bg-mid);
@@ -2319,10 +2577,12 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
 .metrics-grid .metric-card:nth-child(2) { animation-delay: 0.1s; }
 .metrics-grid .metric-card:nth-child(3) { animation-delay: 0.15s; }
 .metrics-grid .metric-card:nth-child(4) { animation-delay: 0.2s; }
+.metrics-grid .metric-card:nth-child(5) { animation-delay: 0.225s; }
 .metrics-grid + .metrics-grid .metric-card:nth-child(1) { animation-delay: 0.25s; }
 .metrics-grid + .metrics-grid .metric-card:nth-child(2) { animation-delay: 0.3s; }
 .metrics-grid + .metrics-grid .metric-card:nth-child(3) { animation-delay: 0.35s; }
 .metrics-grid + .metrics-grid .metric-card:nth-child(4) { animation-delay: 0.4s; }
+.metrics-grid + .metrics-grid .metric-card:nth-child(5) { animation-delay: 0.45s; }
 
 @media (max-width: 1024px) {
   .metrics-grid { grid-template-columns: repeat(2, 1fr); }
@@ -2422,6 +2682,11 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       <div class="metric-value loading" id="wishlistNet">--</div>
       <div class="metric-sub" id="wishlistSub"></div>
     </div>
+    <div class="metric-card" id="followersCard">
+      <div class="metric-label" id="followersLabel">Followers</div>
+      <div class="metric-value loading" id="followerCount">--</div>
+      <div class="metric-sub" id="followerSub"></div>
+    </div>
     <div class="metric-card sales-only">
       <div class="metric-label">Refund Rate</div>
       <div class="metric-value loading" id="refundRate">--</div>
@@ -2458,6 +2723,10 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       <h3>Cumulative Wishlists by Game</h3>
       <canvas id="wishlistStackedChart" height="180"></canvas>
     </div>
+    <div class="chart-card">
+      <h3>Follower Growth</h3>
+      <canvas id="followerChart" height="180"></canvas>
+    </div>
   </div>
   <div class="section-header"><h2>Geographic Breakdown</h2></div>
   <div class="country-grid">
@@ -2489,7 +2758,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
   var rootEl = document.documentElement;
   rootEl.setAttribute('data-theme', '{{THEME}}');
 
-  var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart, wishlistStackedChart;
+  var playerChart, salesChart, salesTimelineChart, revenueTimelineChart, wishlistChart, wishlistStackedChart, followerChart;
   var currentAppId = localStorage.getItem('selectedGame') || '{{DEFAULT_APP_ID}}';
   var allGames = {{GAMES_JSON}};
   var isPortfolioMode = (currentAppId === '__all__');
@@ -2566,6 +2835,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     if (playerChart) playerChart.destroy();
     if (wishlistChart) wishlistChart.destroy();
     if (wishlistStackedChart) wishlistStackedChart.destroy();
+    if (followerChart) followerChart.destroy();
     initCharts();
   }
 
@@ -2732,6 +3002,20 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
     } else {
       wishlistStackedChart = null;
     }
+
+    // Follower growth. Single shared y-axis: a second axis for the studio
+    // series would obscure that these measure different things.
+    followerChart = new Chart(document.getElementById('followerChart'), {
+      type: 'line',
+      data: { labels: [], datasets: [] },
+      options: Object.assign({}, baseOpts, {
+        plugins: { legend: isPortfolioMode ? legendCfg : { display: false }, tooltip: baseTooltip },
+        scales: {
+          x: Object.assign({}, baseScaleX, { ticks: Object.assign({}, baseScaleX.ticks, { maxTicksLimit: 20 }) }),
+          y: Object.assign({}, baseScaleY, { beginAtZero: false })
+        }
+      })
+    });
   }
 
   function updatePortfolioCharts(data) {
@@ -2893,6 +3177,59 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       wishlistStackedChart.data.datasets = wlDatasets;
       wishlistStackedChart.update('none');
     }
+
+    // Follower growth: one line per game plus the studio. The studio line is
+    // dashed, heavier and legend-first so it cannot read as another game --
+    // studio followers are independent of game followers, not a sum of them.
+    if (followerChart) {
+      var fcc = getChartColors();
+      var studioFh = data.studio_follower_history || [];
+      var allFDates = {};
+      gameIds.forEach(function(id) {
+        (perGame[id].follower_history || []).forEach(function(r) { allFDates[r[0]] = true; });
+      });
+      studioFh.forEach(function(r) { allFDates[r[0]] = true; });
+      var sortedFDates = Object.keys(allFDates).sort();
+
+      var fDatasets = [];
+
+      if (data.studio_configured) {
+        var studioByDate = {};
+        studioFh.forEach(function(r) { studioByDate[r[0]] = r[1]; });
+        fDatasets.push({
+          label: data.studio_name || 'Studio',
+          data: sortedFDates.map(function(d) {
+            return studioByDate[d] === undefined ? null : studioByDate[d];
+          }),
+          borderColor: fcc.gold, backgroundColor: 'transparent',
+          borderDash: [6, 3], borderWidth: 3, tension: 0.35,
+          pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
+          pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent',
+          spanGaps: true
+        });
+      }
+
+      gameIds.forEach(function(id, idx) {
+        var color = gameColors[idx % gameColors.length];
+        var byDate = {};
+        (perGame[id].follower_history || []).forEach(function(r) { byDate[r[0]] = r[1]; });
+        fDatasets.push({
+          label: perGame[id].name,
+          data: sortedFDates.map(function(d) {
+            return byDate[d] === undefined ? null : byDate[d];
+          }),
+          borderColor: color.border, backgroundColor: 'transparent',
+          borderWidth: 2, tension: 0.35,
+          pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
+          pointBackgroundColor: color.border, pointBorderColor: 'transparent',
+          spanGaps: true
+        });
+      });
+
+      followerChart.data.labels = sortedFDates;
+      followerChart.data.datasets = fDatasets;
+      followerChart.update('none');
+    }
   }
 
   function fetchData() {
@@ -2918,14 +3255,14 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
         document.getElementById('cumChartsRow').className = 'charts-row sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales';
         document.getElementById('wishlistStackedCard').style.display = '';
-        document.getElementById('wishlistChartsRow').className = 'charts-row';
+        document.getElementById('wishlistChartsRow').className = 'charts-grid-3';
       } else {
         priceEl.style.display = '';
         document.getElementById('cumRevenueCard').style.display = 'none';
         document.getElementById('cumChartsRow').className = 'charts-grid sales-only';
         document.getElementById('cumSalesTitle').innerHTML = 'Cumulative Sales &amp; Revenue';
         document.getElementById('wishlistStackedCard').style.display = 'none';
-        document.getElementById('wishlistChartsRow').className = 'charts-grid';
+        document.getElementById('wishlistChartsRow').className = 'charts-row';
         var d = data.app_details || {};
         var fallback = (allGames.find(function(g) { return g.app_id === currentAppId; }) || {});
         document.getElementById('gameName').textContent = d.name || fallback.name || currentAppId;
@@ -2945,6 +3282,25 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
           priceEl.classList.remove('prelaunch');
           priceEl.textContent = (d.price_overview && d.price_overview.final_formatted) || '';
         }
+      }
+
+      // Followers. Studio followers are a separate metric shown only on All
+      // Games, never a sum of the per-game counts.
+      var fCard = document.getElementById('followersCard');
+      if (isPortfolioMode) {
+        if (data.studio_configured) {
+          fCard.style.display = '';
+          document.getElementById('followersLabel').textContent = 'Studio Followers';
+          document.getElementById('followerCount').textContent = (data.studio_followers === null || data.studio_followers === undefined) ? '--' : data.studio_followers.toLocaleString();
+          document.getElementById('followerSub').textContent = data.studio_name || '';
+        } else {
+          fCard.style.display = 'none';
+        }
+      } else {
+        fCard.style.display = '';
+        document.getElementById('followersLabel').textContent = 'Followers';
+        document.getElementById('followerCount').textContent = (data.followers === null || data.followers === undefined) ? '--' : data.followers.toLocaleString();
+        document.getElementById('followerSub').textContent = '';
       }
       document.querySelectorAll('.metric-value.loading').forEach(function(el) { el.classList.remove('loading'); });
 
@@ -3013,6 +3369,22 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
       wishlistChart.data.datasets[1].data = dw.map(function(r) { return -r[2]; });
       wishlistChart.data.datasets[2].data = dw.map(function(r) { cumWl += r[1] - r[2] - r[3]; return cumWl; });
       wishlistChart.update('none');
+
+      if (followerChart && !isPortfolioMode) {
+        var fcc = getChartColors();
+        var isMobile = window.innerWidth <= 768;
+        var fh = data.follower_history || [];
+        followerChart.data.labels = fh.map(function(r) { return r[0]; });
+        followerChart.data.datasets = [{
+          label: 'Followers',
+          data: fh.map(function(r) { return r[1]; }),
+          borderColor: fcc.gold, backgroundColor: 'transparent',
+          borderWidth: 2, tension: 0.35,
+          pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
+          pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent'
+        }];
+        followerChart.update('none');
+      }
 
       var rev = data.reviews || {};
       var total = rev.total_reviews || 0, pos = rev.total_positive || 0, neg = rev.total_negative || 0;
@@ -3181,6 +3553,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             financial_key = params.get('financial_key', [''])[0]
             app_ids_raw = params.get('app_ids', [''])[0]
             app_ids = [a.strip() for a in app_ids_raw.split(',') if a.strip()] if app_ids_raw else []
+            studio_url = params.get('studio_url', [''])[0]
 
             if not api_key:
                 self._json_response({'success': False, 'error': 'Missing api_key'})
@@ -3245,11 +3618,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            # Studio follower page is optional, so it never gates overall success
+            studio_result = None
+            if studio_url:
+                studio_count = get_studio_followers(studio_url)
+                if studio_count is None:
+                    studio_result = {'success': False,
+                                     'error': 'Could not read a follower count from that page'}
+                else:
+                    studio_result = {'success': True, 'followers': studio_count}
+
             all_games_ok = all(r["success"] for r in results)
             self._json_response({
                 'success': all_games_ok and api_key_valid,
                 'api_key_valid': api_key_valid,
                 'financial_key_valid': financial_key_valid,
+                'studio': studio_result,
                 'games': results
             })
 
@@ -3305,6 +3689,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "collector_status": collector.status,
                 "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
                 "discussions": gs.cached_discussions,
+                "followers": gs.cached_followers,
+                "follower_history": get_follower_history(req_app_id),
                 "timestamp": datetime.now().isoformat()
             }
             self._json_response(payload)
@@ -3364,7 +3750,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "daily_sales": get_all_daily_sales(app_id),
                     "player_history": get_player_history(app_id),
                     "wishlist_history": get_wishlist_history(app_id),
-                    "daily_wishlists": get_daily_wishlists(app_id)
+                    "daily_wishlists": get_daily_wishlists(app_id),
+                    "follower_history": get_follower_history(app_id)
                 }
 
                 # Recent reviews with game name
@@ -3431,6 +3818,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "wishlist_by_country": merged_wl_by_country,
                 "recent_reviews": all_recent_reviews,
                 "discussions": all_discussions,
+                "studio_followers": collector.cached_studio_followers,
+                "studio_name": settings.get('studio', {}).get('name', ''),
+                "studio_configured": bool(settings.get('studio', {}).get('url', '')),
+                "studio_follower_history": get_follower_history(STUDIO_APP_ID),
                 "telegram_active": bool(tg.get('enabled') and tg.get('bot_token') and tg.get('chat_ids')),
                 "collector_status": collector.status,
                 "warnings": ["Steam API rate limit detected. Backfill slowed."] if collector.throttled else [],
