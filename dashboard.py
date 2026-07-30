@@ -3103,6 +3103,12 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
 
     // Follower growth. Single shared y-axis: a second axis for the studio
     // series would obscure that these measure different things.
+    //
+    // Every dataset here uses tension 0, unlike the other charts in this file.
+    // Followers are integers that step by one on a given day, often after a long
+    // flat run. Bezier smoothing overshoots that shape, drawing a rounded hook
+    // above the final value: a count the game never actually had. Straight
+    // segments cannot invent a value that was never recorded.
     followerChart = new Chart(document.getElementById('followerChart'), {
       type: 'line',
       data: { labels: [], datasets: [] },
@@ -3303,7 +3309,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
             return studioByDate[d] === undefined ? null : studioByDate[d];
           }),
           borderColor: fcc.gold, backgroundColor: 'transparent',
-          borderDash: [6, 3], borderWidth: 3, tension: 0.35,
+          borderDash: [6, 3], borderWidth: 3, tension: 0,
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent',
           spanGaps: true
@@ -3320,7 +3326,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
             return byDate[d] === undefined ? null : byDate[d];
           }),
           borderColor: color.border, backgroundColor: 'transparent',
-          borderWidth: 2, tension: 0.35,
+          borderWidth: 2, tension: 0,
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: color.border, pointBorderColor: 'transparent',
           spanGaps: true
@@ -3492,7 +3498,7 @@ body.unreleased .country-grid { grid-template-columns: 1fr; }
           }),
           spanGaps: true,
           borderColor: fcc.gold, backgroundColor: 'transparent',
-          borderWidth: 2, tension: 0.35,
+          borderWidth: 2, tension: 0,
           pointRadius: 0, pointHoverRadius: isMobile ? 2 : 4,
           pointBackgroundColor: fcc.gold, pointBorderColor: 'transparent'
         }];
