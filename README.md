@@ -156,14 +156,33 @@ sudo systemctl start steam-dashboard
 
 Your dashboard is now at `http://your-server-ip:8081`.
 
+### Authentication
+
+The dashboard requires a username and password. Set them on the host:
+
+```bash
+python3 dashboard.py --set-auth <username>
+```
+
+You are prompted for the password twice; it is stored as a PBKDF2-SHA256 hash
+(600,000 iterations) with a random per-install salt, never in plaintext.
+Re-run the command at any time to change the credentials.
+
+**Until credentials are set, a configured dashboard serves nothing but a 503.**
+That is deliberate: the settings page embeds your Steam API keys in its page
+source, so failing open would hand them to anyone who can reach the port. A
+fresh install with no API keys yet still shows the setup wizard, so first-run
+setup is unaffected.
+
 ### Security Note
 
-This dashboard has no built-in authentication. If you're deploying to a public server, put it behind a reverse proxy with basic auth:
+Credentials travel as HTTP Basic auth, which is base64, **not encryption**.
+Anyone able to observe traffic on the network can read them. Over Tailscale or
+a VPN this is fine, because the transport is already encrypted. On an untrusted
+network, terminate TLS in front of the dashboard:
 
 ```nginx
 location / {
-    auth_basic "Steam Dashboard";
-    auth_basic_user_file /etc/nginx/.htpasswd;
     proxy_pass http://127.0.0.1:8081;
 }
 ```
@@ -173,6 +192,8 @@ Or restrict access by IP using your firewall.
 ## Configuration
 
 Everything is configured through the web UI. There are no config files to edit.
+The one exception is the dashboard login, set from the command line with
+`--set-auth` so the password is never posted through a browser.
 
 For advanced users: all settings are stored in a local SQLite database (`steam_dashboard.db`) created on first run. You can back it up, move it to another server, or inspect it with any SQLite client.
 
