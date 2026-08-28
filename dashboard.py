@@ -16,6 +16,11 @@ import os
 import sys
 import csv
 import io
+import base64
+import hmac
+import hashlib
+import secrets
+import getpass
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.request import urlopen, Request
 from urllib.error import HTTPError
@@ -120,6 +125,92 @@ def save_all_settings(data):
     set_setting('studio', data.get('studio', {'name': '', 'url': ''}))
     set_setting('telegram', data.get('telegram', {'enabled': False, 'bot_token': '', 'chat_ids': []}))
     set_setting('dashboard', data.get('dashboard', {'port': 8081, 'poll_interval': 300, 'language': 'en', 'theme': 'dark', 'accent': 'steam'}))
+
+
+# --- Dashboard authentication ---
+#
+# Credentials live under their own settings key and are deliberately absent from
+# get_all_settings(), so the settings page can neither display them nor clobber
+# them on save. Change them with `dashboard.py --set-auth <username>`.
+
+PBKDF2_ITERATIONS = 600000
+
+# Basic auth resends credentials on every request and the dashboard polls
+# constantly, so verified credentials are cached to keep PBKDF2 off the hot path.
+_AUTH_CACHE = {}
+_AUTH_CACHE_TTL = 300
+_AUTH_CACHE_MAX = 32
+_AUTH_CACHE_LOCK = threading.Lock()
+
+
+def hash_dashboard_password(password, salt, iterations=PBKDF2_ITERATIONS):
+    return hashlib.pbkdf2_hmac(
+        'sha256', str(password or '').encode('utf-8'),
+        str(salt or '').encode('utf-8'), int(iterations)
+    ).hex()
+
+
+def get_dashboard_auth():
+    return get_setting('dashboard_auth', {}) or {}
+
+
+def set_dashboard_auth(username, password):
+    salt = secrets.token_hex(16)
+    set_setting('dashboard_auth', {
+        'username': str(username or '').strip(),
+        'salt': salt,
+        'iterations': PBKDF2_ITERATIONS,
+        'password_hash': hash_dashboard_password(password, salt),
+    })
+    with _AUTH_CACHE_LOCK:
+        _AUTH_CACHE.clear()
+
+
+def dashboard_auth_configured(auth=None):
+    auth = get_dashboard_auth() if auth is None else auth
+    return bool(auth.get('username') and auth.get('password_hash') and auth.get('salt'))
+
+
+def verify_dashboard_password(auth, username, password):
+    if not dashboard_auth_configured(auth):
+        return False
+    # compare_digest on the username too, so a wrong name costs the same as a wrong password.
+    user_ok = hmac.compare_digest(str(username or ''), str(auth.get('username', '')))
+    actual = hash_dashboard_password(password, auth.get('salt', ''),
+                                     auth.get('iterations', PBKDF2_ITERATIONS))
+    pass_ok = hmac.compare_digest(actual, str(auth.get('password_hash', '')))
+    return user_ok and pass_ok
+
+
+def check_dashboard_credentials(header_value):
+    """True if an Authorization header carries valid Basic credentials."""
+    if not header_value.startswith('Basic '):
+        return False
+    token = header_value.split(' ', 1)[1].strip()
+    key = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    now = time.time()
+
+    with _AUTH_CACHE_LOCK:
+        expiry = _AUTH_CACHE.get(key)
+        if expiry and expiry > now:
+            return True
+        if expiry:
+            del _AUTH_CACHE[key]
+
+    try:
+        username, password = base64.b64decode(token).decode('utf-8').split(':', 1)
+    except Exception:
+        return False
+
+    if not verify_dashboard_password(get_dashboard_auth(), username, password):
+        return False
+
+    with _AUTH_CACHE_LOCK:
+        # Only successes are cached, so failed attempts cannot grow this.
+        if len(_AUTH_CACHE) >= _AUTH_CACHE_MAX:
+            _AUTH_CACHE.clear()
+        _AUTH_CACHE[key] = now + _AUTH_CACHE_TTL
+    return True
 
 
 # --- Per-game data helpers ---
@@ -3741,9 +3832,46 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(html.encode('utf-8'))
 
+    def _auth_guard(self, is_api=False):
+        """True if the request was rejected and the caller must stop.
+
+        A configured instance with no credentials set serves nothing at all:
+        /settings embeds the Steam API keys in its page source, so failing open
+        would publish them to anyone who can reach the port.
+        """
+        if not has_settings():
+            return False
+
+        if not dashboard_auth_configured():
+            msg = ("Dashboard credentials are not set. On the host, run: "
+                   "python3 dashboard.py --set-auth <username>")
+            if is_api:
+                self._json_response({'success': False, 'error': msg}, 503)
+            else:
+                self.send_response(503)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(msg.encode('utf-8'))
+            return True
+
+        if check_dashboard_credentials(self.headers.get('Authorization', '')):
+            return False
+
+        self.send_response(401)
+        self.send_header('WWW-Authenticate', 'Basic realm="Steam Dashboard"')
+        self.send_header('Content-Type', 'application/json' if is_api else 'text/plain; charset=utf-8')
+        self.end_headers()
+        body = (json.dumps({'success': False, 'error': 'Authentication required'})
+                if is_api else 'Authentication required')
+        self.wfile.write(body.encode('utf-8'))
+        return True
+
     def do_GET(self):
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
+
+        if self._auth_guard(is_api=parsed.path.startswith('/api/')):
+            return
 
         if parsed.path in ('/', '/dashboard'):
             if not has_settings():
@@ -4051,6 +4179,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         parsed = urlparse(self.path)
 
+        if self._auth_guard(is_api=True):
+            return
+
         if parsed.path in ('/api/setup', '/api/settings'):
             body = self._read_body()
             try:
@@ -4290,6 +4421,29 @@ def cli_anchor_zero(app_id, day, dry_run=False):
     return 0
 
 
+def _read_password(prompt):
+    # getpass reads the console directly on Windows and would block forever on a
+    # pipe, so non-interactive callers are served from stdin instead.
+    if not sys.stdin.isatty():
+        return sys.stdin.readline().rstrip('\n')
+    return getpass.getpass(prompt)
+
+
+def cli_set_auth(username):
+    init_db()
+    password = _read_password("New dashboard password: ")
+    if not password:
+        print("[ERROR] Password must not be empty.")
+        return 1
+    if password != _read_password("Confirm password: "):
+        print("[ERROR] Passwords did not match.")
+        return 1
+    set_dashboard_auth(username, password)
+    print(f"[OK] Dashboard credentials set for '{username}'.")
+    print("     Restart the dashboard for open sessions to be re-prompted.")
+    return 0
+
+
 def _cli(argv):
     """Handle the maintenance subcommands. Returns None to fall through to main()."""
     dry = '--dry-run' in argv
@@ -4316,6 +4470,14 @@ def _cli(argv):
             print("usage: dashboard.py --anchor-zero <app_id> <YYYY-MM-DD> [--dry-run]")
             return 1
         return cli_anchor_zero(rest[0], rest[1], dry)
+
+    if '--set-auth' in argv:
+        i = argv.index('--set-auth')
+        rest = argv[i + 1:]
+        if not rest or not rest[0].strip():
+            print("usage: dashboard.py --set-auth <username>")
+            return 1
+        return cli_set_auth(rest[0].strip())
 
     return None
 

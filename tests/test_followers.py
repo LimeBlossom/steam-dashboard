@@ -9,6 +9,8 @@ import threading
 import time
 import json
 import urllib.request
+import urllib.error
+import base64
 from contextlib import ExitStack
 from unittest.mock import patch
 import dashboard
@@ -470,6 +472,10 @@ class TestApiDataHasNoStudioKey(unittest.TestCase):
             'games': [{'app_id': '12345', 'name': 'Test Game', 'launch_date': '2025-01-01'}],
         })
         dashboard.save_follower_count('12345', 44)
+        # A configured instance serves nothing without credentials, so the
+        # handler tests have to authenticate like any other client.
+        dashboard.set_dashboard_auth('tester', 'testpw')
+        self._auth = 'Basic ' + base64.b64encode(b'tester:testpw').decode('ascii')
 
         self._server = dashboard.ReusableHTTPServer(('127.0.0.1', 0), dashboard.DashboardHandler)
         self._server.collector = dashboard.DataCollector()
@@ -484,15 +490,33 @@ class TestApiDataHasNoStudioKey(unittest.TestCase):
         self._patcher.stop()
         shutil.rmtree(self._tmp, ignore_errors=True)
 
+    def _get(self, path, auth=True):
+        req = urllib.request.Request(f"http://127.0.0.1:{self._port}{path}")
+        if auth:
+            req.add_header('Authorization', self._auth)
+        return urllib.request.urlopen(req, timeout=5)
+
     def test_per_game_payload_omits_studio_keys(self):
-        with urllib.request.urlopen(
-                f"http://127.0.0.1:{self._port}/api/data?app_id=12345", timeout=5) as resp:
+        with self._get("/api/data?app_id=12345") as resp:
             payload = json.loads(resp.read().decode('utf-8'))
 
         self.assertIn('followers', payload)
         self.assertIn('follower_history', payload)
         for key in ('studio_followers', 'studio_name', 'studio_configured', 'studio_follower_history'):
             self.assertNotIn(key, payload)
+
+    def test_api_rejects_a_request_without_credentials(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self._get("/api/data?app_id=12345", auth=False)
+        self.assertEqual(caught.exception.code, 401)
+
+    def test_settings_page_does_not_leak_keys_to_an_anonymous_caller(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            self._get("/settings", auth=False)
+        self.assertEqual(caught.exception.code, 401)
+        # The embedded settings JSON is what leaks the keys, so its field
+        # names must not appear in an unauthenticated response body.
+        self.assertNotIn(b'steam_api_key', caught.exception.read())
 
 
 _STEAMDB_CSV = '\ufeff"DateTime","Followers"\n' \
